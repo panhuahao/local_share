@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史记录 - 多媒体分享平台</title>
+    <script src="tailwind.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+        
+        body {
+            background-color: #1a1a1a;
+            color: #333333;
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .content-card {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+        
+        .content-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        
+        .masonry-grid {
+            column-count: 1;
+            column-gap: 16px;
+        }
+        
+        @media (min-width: 768px) {
+            .masonry-grid {
+                column-count: 2;
+            }
+        }
+        
+        @media (min-width: 1024px) {
+            .masonry-grid {
+                column-count: 3;
+            }
+        }
+        
+        .masonry-item {
+            break-inside: avoid;
+            margin-bottom: 16px;
+        }
+        
+        .nav-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            transition: all 0.3s ease;
+        }
+        
+        .nav-item.active {
+            color: #ff6b35;
+        }
+        
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+        
+        .slide-up {
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .content-wrapper {
+            padding-bottom: calc(180px + env(safe-area-inset-bottom));
+        }
+        
+        .nav-bar {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        .batch-toolbar {
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+        }
+        
+        .batch-toolbar.show {
+            transform: translateY(0);
+        }
+        
+        .checkbox-wrapper {
+            position: relative;
+        }
+        
+        .checkbox-wrapper input[type="checkbox"] {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 10;
+            width: 20px;
+            height: 20px;
+            accent-color: #ff6b35;
+        }
+        
+        .checkbox-wrapper input[type="checkbox"]:checked + .content-card {
+            ring: 2px solid #ff6b35;
+        }
+        
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #ff6b35;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #e55a2b;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="glass-effect sticky top-0 z-40 px-4 py-3">
+        <div class="flex items-center justify-between max-w-6xl mx-auto">
+            <div class="flex items-center space-x-3">
+                <button onclick="history.back()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                </button>
+                <h1 class="text-xl font-bold text-gray-800">回收站</h1>
+            </div>
+            
+            <div class="flex items-center space-x-3">
+                <button id="selectAllBtn" class="px-4 py-2 text-orange-600 hover:bg-orange-50 rounded-lg transition-colors text-sm font-medium">
+                    全选
+                </button>
+                <button id="batchDeleteBtn" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium">
+                    批量删除
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要内容区域 -->
+    <main class="content-wrapper max-w-6xl mx-auto px-4 py-6">
+        <!-- 筛选工具栏 -->
+        <div class="flex flex-wrap items-center justify-between mb-6 gap-3">
+            <div class="flex items-center space-x-2">
+                <button class="filter-btn active px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium" data-filter="all">
+                    全部
+                </button>
+                <button class="filter-btn px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200" data-filter="image">
+                    图片
+                </button>
+                <button class="filter-btn px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200" data-filter="video">
+                    视频
+                </button>
+                <button class="filter-btn px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200" data-filter="text">
+                    文字
+                </button>
+            </div>
+            
+            <div class="flex items-center space-x-2">
+                <span class="text-sm text-gray-500">排序:</span>
+                <select id="sortSelect" class="px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500">
+                    <option value="deletedNewest">删除时间(新)</option>
+                    <option value="deletedOldest">删除时间(旧)</option>
+                    <option value="createdNewest">创建时间(新)</option>
+                    <option value="createdOldest">创建时间(旧)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="glass-effect rounded-xl p-4 mb-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="text-center">
+                        <div id="totalCount" class="text-2xl font-bold text-orange-600">0</div>
+                        <div class="text-sm text-gray-500">总计</div>
+                    </div>
+                    <div class="text-center">
+                        <div id="imageCount" class="text-2xl font-bold text-blue-600">0</div>
+                        <div class="text-sm text-gray-500">图片</div>
+                    </div>
+                    <div class="text-center">
+                        <div id="videoCount" class="text-2xl font-bold text-green-600">0</div>
+                        <div class="text-sm text-gray-500">视频</div>
+                    </div>
+                    <div class="text-center">
+                        <div id="textCount" class="text-2xl font-bold text-purple-600">0</div>
+                        <div class="text-sm text-gray-500">文字</div>
+                    </div>
+                </div>
+                
+                <div class="text-right">
+                    <div class="text-sm text-gray-500">存储占用</div>
+                    <div id="storageUsed" class="text-lg font-semibold text-gray-700">0 MB</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 内容展示区域 -->
+        <div id="contentGrid" class="masonry-grid">
+            <!-- 内容卡片将在这里动态生成 -->
+        </div>
+        
+        <!-- 空状态 -->
+        <div id="emptyState" class="hidden text-center py-12">
+            <svg class="w-24 h-24 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+            </svg>
+            <h3 class="text-lg font-medium text-gray-500 mb-2">回收站为空</h3>
+            <p class="text-gray-400">删除的内容将在这里显示，您可以选择恢复或永久删除。</p>
+        </div>
+
+        <!-- 加载状态 -->
+        <div id="loadingState" class="hidden text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mb-4"></div>
+            <p class="text-gray-500">加载中...</p>
+        </div>
+        <!-- 底部物理占位符 -->
+        <div class="h-32"></div>
+    </main>
+
+    <!-- 批量操作工具栏 -->
+    <div id="batchToolbar" class="batch-toolbar fixed bottom-16 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3 z-50">
+        <div class="flex items-center justify-between max-w-6xl mx-auto">
+            <div class="flex items-center space-x-4">
+                <span id="selectedCount" class="text-sm text-gray-600">已选择 0 项</span>
+                <button id="clearSelectionBtn" class="text-sm text-orange-600 hover:text-orange-700">清空选择</button>
+            </div>
+            <div class="flex items-center space-x-3">
+                <button id="batchRestoreBtn" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">
+                    批量恢复
+                </button>
+                <button id="batchDeletePermanentBtn" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium">
+                    永久删除
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部导航栏 -->
+    <nav class="nav-bar">
+        <div class="flex items-center justify-around py-2">
+            <a href="/" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5a2 2 0 012-2h2a2 2 0 012 2v0H8v0z"></path>
+                </svg>
+                <span class="text-xs">首页</span>
+            </a>
+            
+            <a href="/history.html" class="nav-item active flex flex-col items-center py-2 px-4">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="text-xs">历史</span>
+            </a>
+            
+            <a href="/settings.html" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <span class="text-xs">设置</span>
+            </a>
+        </div>
+    </nav>
+
+    <!-- 确认恢复模态框 -->
+    <div id="restoreModal" class="fixed inset-0 z-50 hidden">
+        <div class="modal-overlay absolute inset-0" onclick="closeRestoreModal()"></div>
+        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-2xl max-w-md w-full slide-up">
+                <div class="p-6 text-center">
+                    <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5a2 2 0 012-2h2a2 2 0 012 2v0H8v0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">确认恢复</h3>
+                    <p id="restoreModalText" class="text-gray-600 mb-6">选中的内容将恢复到首页。</p>
+                    <div class="flex space-x-3">
+                        <button onclick="closeRestoreModal()" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                            取消
+                        </button>
+                        <button id="confirmRestoreBtn" class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+                            恢复
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认永久删除模态框 -->
+    <div id="deletePermanentModal" class="fixed inset-0 z-50 hidden">
+        <div class="modal-overlay absolute inset-0" onclick="closeDeletePermanentModal()"></div>
+        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-2xl max-w-md w-full slide-up">
+                <div class="p-6 text-center">
+                    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-semibold text-red-600 mb-2">危险操作</h3>
+                    <p id="deletePermanentModalText" class="text-gray-600 mb-6">选中的内容将被永久删除，无法恢复！</p>
+                    <div class="flex space-x-3">
+                        <button onclick="closeDeletePermanentModal()" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                            取消
+                        </button>
+                        <button id="confirmDeletePermanentBtn" class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
+                            永久删除
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

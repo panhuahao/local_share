@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设置 - 多媒体分享平台</title>
+    <script src="tailwind.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+        
+        body {
+            background-color: #1a1a1a;
+            color: #333333;
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .nav-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            transition: all 0.3s ease;
+        }
+        
+        .nav-item.active {
+            color: #ff6b35;
+        }
+        
+        .content-wrapper {
+            padding-bottom: calc(140px + env(safe-area-inset-bottom));
+        }
+        
+        .nav-bar {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .toggle-slider {
+            background-color: #ff6b35;
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        
+        .progress-bar {
+            background-color: #e5e7eb;
+            border-radius: 9999px;
+            height: 8px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            background-color: #ff6b35;
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .setting-item {
+            transition: all 0.3s ease;
+        }
+        
+        .setting-item:hover {
+            background-color: #f9fafb;
+        }
+        
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+        
+        .slide-up {
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #ff6b35;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #e55a2b;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="glass-effect sticky top-0 z-40 px-4 py-3">
+        <div class="flex items-center justify-between max-w-6xl mx-auto">
+            <div class="flex items-center space-x-3">
+                <button onclick="history.back()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                </button>
+                <h1 class="text-xl font-bold text-gray-800">设置</h1>
+            </div>
+            
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 bg-gradient-to-br from-orange-400 to-orange-600 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要内容区域 -->
+    <main class="content-wrapper max-w-6xl mx-auto px-4 py-6">
+        <!-- 用户信息区域 -->
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <div class="flex items-center space-x-4">
+                <div class="w-16 h-16 bg-gradient-to-br from-orange-400 to-orange-600 rounded-full flex items-center justify-center">
+                    <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-xl font-bold text-gray-800">个人用户</h2>
+                    <p class="text-gray-500">本地存储模式</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 刷新设置 -->
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <svg class="w-5 h-5 text-orange-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                刷新设置
+            </h3>
+            
+            <div class="space-y-4">
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">自动刷新</h4>
+                        <p class="text-sm text-gray-500">定时自动刷新内容</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoRefreshToggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">刷新间隔</h4>
+                        <p class="text-sm text-gray-500">设置自动刷新的时间间隔</p>
+                    </div>
+                    <select id="refreshInterval" class="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500">
+                        <option value="1">1分钟</option>
+                        <option value="5" selected>5分钟</option>
+                        <option value="15">15分钟</option>
+                        <option value="30">30分钟</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 存储管理 -->
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <svg class="w-5 h-5 text-orange-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H6a2 2 0 00-2-2z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5a2 2 0 012-2h2a2 2 0 012 2v0H8v0z"></path>
+                </svg>
+                存储管理
+            </h3>
+            
+            <div class="space-y-4">
+                <div class="setting-item p-3 rounded-lg">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="font-medium text-gray-800">存储使用情况</h4>
+                        <span id="storageText" class="text-sm text-gray-500">0 MB / 5 GB</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="storageProgress" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">自动清理</h4>
+                        <p class="text-sm text-gray-500">自动清理超过指定时间的内容</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoCleanupToggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">清理周期</h4>
+                        <p class="text-sm text-gray-500">设置自动清理的时间周期</p>
+                    </div>
+                    <select id="cleanupPeriod" class="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500">
+                        <option value="7">7天</option>
+                        <option value="30" selected>30天</option>
+                        <option value="90">90天</option>
+                        <option value="365">1年</option>
+                    </select>
+                </div>
+                
+                <div class="setting-item p-3 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-medium text-gray-800">清理缓存</h4>
+                            <p class="text-sm text-gray-500">立即清理所有缓存数据</p>
+                        </div>
+                        <button id="clearCacheBtn" class="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium">
+                            清理
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据管理 -->
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <svg class="w-5 h-5 text-orange-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                数据管理
+            </h3>
+            
+            <div class="space-y-4">
+                <div class="setting-item p-3 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-medium text-gray-800">导出数据</h4>
+                            <p class="text-sm text-gray-500">将所有内容导出为JSON文件</p>
+                        </div>
+                        <button id="exportDataBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
+                            导出
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="setting-item p-3 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-medium text-gray-800">导入数据</h4>
+                            <p class="text-sm text-gray-500">从JSON文件导入内容</p>
+                        </div>
+                        <button id="importDataBtn" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">
+                            导入
+                        </button>
+                    </div>
+                    <input type="file" id="importFileInput" accept=".json" class="hidden">
+                </div>
+                
+                <div class="setting-item p-3 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-medium text-gray-800">清空所有数据</h4>
+                            <p class="text-sm text-gray-500">删除所有内容和设置（不可恢复）</p>
+                        </div>
+                        <button id="resetAllBtn" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium">
+                            清空
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 其他设置 -->
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <svg class="w-5 h-5 text-orange-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4"></path>
+                </svg>
+                其他设置
+            </h3>
+            
+            <div class="space-y-4">
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">深色模式</h4>
+                        <p class="text-sm text-gray-500">切换到深色主题</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="darkModeToggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">声音提示</h4>
+                        <p class="text-sm text-gray-500">操作完成时播放提示音</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="soundToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item flex items-center justify-between p-3 rounded-lg">
+                    <div>
+                        <h4 class="font-medium text-gray-800">震动反馈</h4>
+                        <p class="text-sm text-gray-500">操作时提供触觉反馈</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="vibrationToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- 关于信息 -->
+        <div class="glass-effect rounded-2xl p-6 shadow-lg">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <svg class="w-5 h-5 text-orange-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                关于
+            </h3>
+            
+            <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-gray-600">版本</span>
+                    <span class="font-medium">v2.0.0</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-gray-600">构建时间</span>
+                    <span class="font-medium">2026-01-11</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-gray-600">存储类型</span>
+                    <span class="font-medium">服务器存储</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-gray-600">后端服务</span>
+                    <span class="font-medium">Node.js + Express</span>
+                </div>
+                <div class="pt-3 border-t border-gray-200">
+                    <p class="text-sm text-gray-500 text-center">
+                        多媒体分享平台 - 支持多端分享的智能内容管理工具
+                    </p>
+                </div>
+            </div>
+        </div>
+        <!-- 底部物理占位符 -->
+        <div class="h-24"></div>
+    </main>
+
+    <!-- 底部导航栏 -->
+    <nav class="nav-bar">
+        <div class="flex items-center justify-around py-2">
+            <a href="/" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5a2 2 0 012-2h2a2 2 0 012 2v0H8v0z"></path>
+                </svg>
+                <span class="text-xs">首页</span>
+            </a>
+            
+            <a href="/history.html" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="text-xs">历史</span>
+            </a>
+            
+            <a href="/settings.html" class="nav-item active flex flex-col items-center py-2 px-4">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <span class="text-xs">设置</span>
+            </a>
+        </div>
+    </nav>
+
+    <!-- 确认对话框 -->
+    <div id="confirmModal" class="fixed inset-0 z-50 hidden">
+        <div class="modal-overlay absolute inset-0" onclick="closeConfirmModal()"></div>
+        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-2xl max-w-md w-full slide-up">
+                <div class="p-6 text-center">
+                    <div id="confirmIcon" class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                    </div>
+                    <h3 id="confirmTitle" class="text-lg font-semibold text-gray-900 mb-2">确认操作</h3>
+                    <p id="confirmMessage" class="text-gray-600 mb-6">此操作无法撤销，确定要继续吗？</p>
+                    <div class="flex space-x-3">
+                        <button onclick="closeConfirmModal()" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                            取消
+                        </button>
+                        <button id="confirmActionBtn" class="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors">
+                            确认
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 进度对话框 -->
+    <div id="progressModal" class="fixed inset-0 z-50 hidden">
+        <div class="modal-overlay absolute inset-0"></div>
+        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-2xl max-w-md w-full slide-up">
+                <div class="p-6 text-center">
+                    <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-blue-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                    </div>
+                    <h3 id="progressTitle" class="text-lg font-semibold text-gray-900 mb-2">处理中</h3>
+                    <p id="progressMessage" class="text-gray-600 mb-4">请稍候...</p>
+                    <div class="progress-bar">
+                        <div id="progressBar" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
