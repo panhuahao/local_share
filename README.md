@@ -4,17 +4,28 @@
 
 ## 📸 界面预览
 
-### 首页 - 内容分享
-![首页](public/screenshots/home.jpg)
-
-### 文件上传
-![上传界面](public/screenshots/upload.jpg)
-
-### 历史记录管理
-![历史页面](public/screenshots/history.jpg)
-
-### 系统设置
-![设置页面](public/screenshots/setting.jpg)
+<table>
+  <tr>
+    <td width="50%">
+      <img src="public/screenshots/home.jpg" alt="首页" width="100%"/>
+      <p align="center"><b>首页 - 内容分享</b></p>
+    </td>
+    <td width="50%">
+      <img src="public/screenshots/upload.jpg" alt="上传界面" width="100%"/>
+      <p align="center"><b>文件上传</b></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="public/screenshots/history.jpg" alt="历史页面" width="100%"/>
+      <p align="center"><b>历史记录管理</b></p>
+    </td>
+    <td width="50%">
+      <img src="public/screenshots/setting.jpg" alt="设置页面" width="100%"/>
+      <p align="center"><b>系统设置</b></p>
+    </td>
+  </tr>
+</table>
 
 ## ✨ 特性
 
