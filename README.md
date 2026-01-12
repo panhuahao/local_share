@@ -50,20 +50,42 @@ docker-compose up -d
 
 # 查看日志
 docker-compose logs -f
+
+# 访问应用
+# 方式1：通过 Nginx 访问（推荐）
+http://localhost:8580
+
+# 方式2：直接访问 Node.js 后端
+http://localhost:3000
 ```
+
+**端口说明**：
+- `8580`：Nginx 反向代理端口（推荐使用，提供静态资源缓存和负载均衡）
+- `3000`：Node.js 后端直接访问端口
+
+**Docker Compose 服务架构**：
+- **app 容器**：Node.js + Express 后端服务（内部端口 3000）
+- **nginx 容器**：Nginx 反向代理（内部端口 80，映射到主机 8580）
+
+如需修改端口，编辑 `docker-compose.yml` 文件中的 `ports` 配置。
 
 ### 方法三：手动部署
 
 ```bash
-# 安装依赖
+# 安装依赖（需要先安装 Node.js 和 FFmpeg）
 npm install
 
 # 创建必要目录
 mkdir -p uploads data
 
-# 启动服务
+# 启动服务（默认端口 3000）
 node server.js
+
+# 或指定自定义端口
+PORT=8080 node server.js
 ```
+
+访问地址：`http://localhost:3000`
 
 ## 📁 项目结构
 
@@ -217,13 +239,38 @@ npm run dev  # 使用nodemon自动重启
 - 设置SSL证书
 - 配置自动备份
 
-### Docker部署
+### Docker部署（单容器）
+
+如果只需要后端服务，不使用 Nginx：
+
 ```bash
 # 构建镜像
 docker build -t media-share-platform .
 
 # 运行容器
 docker run -d -p 3000:3000 --name media-share media-share-platform
+
+# 访问应用
+http://localhost:3000
+```
+
+### Docker Compose 部署（完整架构）
+
+推荐使用 Docker Compose 部署完整的 Nginx + Node.js 架构：
+
+```bash
+# 启动服务
+docker-compose up -d
+
+# 停止服务
+docker-compose down
+
+# 重新构建并启动
+docker-compose up -d --build --force-recreate
+
+# 访问应用
+http://localhost:8580  # 通过 Nginx（推荐）
+http://localhost:3000  # 直接访问后端
 ```
 
 ## 📊 性能优化
@@ -245,9 +292,14 @@ docker run -d -p 3000:3000 --name media-share media-share-platform
 1. **端口占用**
    ```bash
    # 查看端口占用
-   lsof -i :3000
-   # 或使用其他端口
+   lsof -i :3000     # Linux/Mac
+   netstat -ano | findstr :3000  # Windows
+   
+   # 手动部署：使用其他端口
    PORT=3001 node server.js
+   
+   # Docker Compose：修改 docker-compose.yml 中的端口映射
+   # 例如将 "8580:80" 改为 "8888:80"
    ```
 
 2. **权限问题**
