@@ -196,6 +196,28 @@ cd 仓库名
 docker compose up -d
 ```
 
+### 3.4 ARM 平台部署
+
+对于 ARM 架构的设备（如树莓派、Apple Silicon Mac 等），请使用专门的部署脚本：
+
+```bash
+# 克隆项目
+git clone git@github.com:你的用户名/仓库名.git
+cd 仓库名
+
+# 给部署脚本授权
+chmod +x arm-deploy.sh
+
+# 运行 ARM 部署
+./arm-deploy.sh
+```
+
+**ARM 平台注意事项：**
+- 确保设备有足够的内存（建议至少 2GB RAM）
+- FFmpeg 在 ARM 平台上可能运行较慢，音视频转换时间会更长
+- 如果遇到权限问题，确保 data 和 uploads 目录有正确的读写权限
+- Docker 镜像构建可能需要更多时间
+
 ### 3.4 后续更新
 
 每次修改代码后：

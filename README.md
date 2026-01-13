@@ -298,6 +298,21 @@ http://localhost:8580  # 通过 Nginx（推荐）
 http://localhost:3000  # 直接访问后端
 ```
 
+**ARM 平台部署**：如果在 ARM 架构设备（如树莓派、Apple Silicon Mac）上部署，请使用专用部署脚本：
+
+```bash
+# 给部署脚本授权
+chmod +x arm-deploy.sh
+
+# 运行 ARM 部署
+./arm-deploy.sh
+```
+
+**ARM 平台注意事项：**
+- FFmpeg 在 ARM 平台上可能运行较慢，音视频转换时间会更长
+- Docker 镜像构建可能需要更多时间
+- 建议设备至少有 2GB RAM
+
 ## 📊 性能优化
 
 - **媒体处理**: 基于 FFmpeg 的视频转码优化
