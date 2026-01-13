@@ -9,10 +9,11 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # 检查 Docker Compose 是否安装
-if ! command -v docker-compose &> /dev/null; then
+if ! command -v docker compose &> /dev/null; then
     echo "正在安装 Docker Compose..."
-    apt update
-    apt install -y docker-compose
+    # 对于现代 Docker 安装，docker compose 应该已内置
+    echo "注意：如果系统没有内置 docker compose，请手动安装 Docker Compose 插件"
+    echo "参考: https://docs.docker.com/compose/cli-command/"
 fi
 
 # 确保数据目录存在且权限正确
@@ -24,14 +25,15 @@ chmod -R 755 data uploads
 if [ -f "Dockerfile.arm" ]; then
     echo "使用 ARM 优化的 Dockerfile..."
     sed -i 's/build: ./build:\
-      context: .\n      dockerfile: Dockerfile.arm/' docker-compose.arm.yml
+      context: .
+      dockerfile: Dockerfile.arm/' docker-compose.arm.yml
 fi
 
 # 构建并启动服务
 echo "构建并启动服务..."
-docker-compose -f docker-compose.arm.yml down
-docker-compose -f docker-compose.arm.yml build --no-cache
-docker-compose -f docker-compose.arm.yml up -d
+docker compose -f docker-compose.arm.yml down
+docker compose -f docker-compose.arm.yml build --no-cache
+docker compose -f docker-compose.arm.yml up -d
 
 # 等待服务启动
 echo "等待服务启动..."
@@ -39,7 +41,7 @@ sleep 10
 
 # 检查服务状态
 echo "检查服务状态..."
-docker-compose -f docker-compose.arm.yml ps
+docker compose -f docker-compose.arm.yml ps
 
 echo "ARM 平台部署完成！"
 echo "访问地址: http://$(hostname -I | awk '{print $1}'):8580"
