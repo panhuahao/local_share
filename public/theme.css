@@ -1,0 +1,115 @@
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-2: #3b82f6;
+  --surface: rgba(255, 255, 255, 0.95);
+  --bg: #f2f6ff;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(37, 99, 235, 0.14), transparent 60%),
+    radial-gradient(900px 500px at 90% 10%, rgba(59, 130, 246, 0.12), transparent 55%),
+    radial-gradient(900px 500px at 50% 110%, rgba(37, 99, 235, 0.10), transparent 60%),
+    var(--bg);
+}
+
+.upload-area {
+  border-color: var(--primary);
+}
+
+.upload-area.dragover {
+  border-color: #93c5fd;
+  background-color: rgba(37, 99, 235, 0.10);
+}
+
+.nav-item.active {
+  color: var(--primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--primary);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-dark);
+}
+
+.loading-spinner {
+  border-top-color: var(--primary);
+}
+
+.bg-orange-500 {
+  background-color: var(--primary) !important;
+}
+
+.bg-orange-600 {
+  background-color: var(--primary-dark) !important;
+}
+
+.bg-orange-700 {
+  background-color: #1e40af !important;
+}
+
+.hover\\:bg-orange-600:hover {
+  background-color: var(--primary-dark) !important;
+}
+
+.hover\\:bg-orange-700:hover {
+  background-color: #1e40af !important;
+}
+
+.text-orange-400 {
+  color: #60a5fa !important;
+}
+
+.text-orange-500 {
+  color: var(--primary) !important;
+}
+
+.text-orange-600 {
+  color: var(--primary) !important;
+}
+
+.text-orange-700 {
+  color: var(--primary-dark) !important;
+}
+
+.text-orange-800 {
+  color: #1e40af !important;
+}
+
+.text-orange-900 {
+  color: #172554 !important;
+}
+
+.border-orange-500 {
+  border-color: rgba(37, 99, 235, 0.55) !important;
+}
+
+.bg-orange-100 {
+  background-color: rgba(37, 99, 235, 0.12) !important;
+}
+
+.bg-orange-50 {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}
+
+.border-orange-100 {
+  border-color: rgba(37, 99, 235, 0.18) !important;
+}
+
+.shadow-orange-200 {
+  --tw-shadow-color: rgba(37, 99, 235, 0.20) !important;
+}
+
+.focus\\:ring-orange-500:focus {
+  --tw-ring-color: rgba(37, 99, 235, 0.55) !important;
+}
+
+.content-wrapper {
+  padding-bottom: calc(160px + env(safe-area-inset-bottom));
+}
+
+.nav-bar {
+  padding-bottom: env(safe-area-inset-bottom);
+}

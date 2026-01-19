@@ -13,8 +13,15 @@ services:
       - ./data:/app/data
       - ./uploads:/app/uploads
     environment:
-      - NODE_ENV=production
-      - PORT=3000
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${PORT}
+      - VOLC_TTS_APP_ID=${VOLC_TTS_APP_ID}
+      - VOLC_TTS_ACCESS_KEY=${VOLC_TTS_ACCESS_KEY}
+      - VOLC_TTS_RESOURCE_ID_V2=${VOLC_TTS_RESOURCE_ID_V2}
+      - VOLC_TTS_RESOURCE_ID_V1=${VOLC_TTS_RESOURCE_ID_V1}
+      - VOLC_TTS_RESOURCE_ID_ICL1=${VOLC_TTS_RESOURCE_ID_ICL1}
+      - VOLC_TTS_RESOURCE_ID_ICL2=${VOLC_TTS_RESOURCE_ID_ICL2}
+      - VOLC_TTS_MODEL_V2=${VOLC_TTS_MODEL_V2}
     networks:
       - media-share-network
     healthcheck:

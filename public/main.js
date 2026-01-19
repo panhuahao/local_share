@@ -40,6 +40,28 @@ class MediaShareApp {
         if (path.includes('settings.html')) return 'settings';
         return 'index';
     }
+
+    svgIcon(name, className) {
+        const attrs = `class="${className}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"`;
+        switch (name) {
+            case 'trash':
+                return `<svg ${attrs}><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>`;
+            case 'download':
+                return `<svg ${attrs}><path d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>`;
+            case 'copy':
+                return `<svg ${attrs}><path d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>`;
+            case 'bolt':
+                return `<svg ${attrs}><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>`;
+            case 'video':
+                return `<svg ${attrs}><path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>`;
+            case 'file':
+                return `<svg ${attrs}><path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>`;
+            case 'music':
+                return `<svg ${attrs}><path d="M9 18V6l12-2v12"></path><circle cx="7.5" cy="18.5" r="2.5"></circle><circle cx="19.5" cy="16.5" r="2.5"></circle></svg>`;
+            default:
+                return '';
+        }
+    }
     
     // 设置网络状态监听器
     setupNetworkListeners() {
@@ -119,10 +141,43 @@ class MediaShareApp {
         if (confirmDeleteBtn) {
             confirmDeleteBtn.addEventListener('click', () => this.confirmDelete());
         }
+
+        // TTS 监听器
+        const openTTSBtn = document.getElementById('openTTSBtn');
+        if (openTTSBtn) {
+            openTTSBtn.addEventListener('click', () => this.openTTSModal());
+        }
+
+        const generateTTSBtn = document.getElementById('generateTTSBtn');
+        if (generateTTSBtn) {
+            generateTTSBtn.addEventListener('click', () => this.generateTTS());
+        }
+
+        const ttsSpeedRange = document.getElementById('ttsSpeedRange');
+        if (ttsSpeedRange) {
+            ttsSpeedRange.addEventListener('input', (e) => {
+                document.getElementById('speedValue').textContent = e.target.value;
+            });
+        }
+
+        const refreshTTSVoicesBtn = document.getElementById('refreshTTSVoicesBtn');
+        if (refreshTTSVoicesBtn) {
+            refreshTTSVoicesBtn.addEventListener('click', () => this.refreshTtsVoices());
+        }
+
+        const addTTSVoiceBtn = document.getElementById('addTTSVoiceBtn');
+        if (addTTSVoiceBtn) {
+            addTTSVoiceBtn.addEventListener('click', () => this.addTtsVoice());
+        }
     }
     
     // 历史页面事件监听器
     setupHistoryEventListeners() {
+        const header = document.querySelector('header');
+        if (header) {
+            document.documentElement.style.setProperty('--history-header-h', `${Math.ceil(header.getBoundingClientRect().height)}px`);
+        }
+
         const selectAllBtn = document.getElementById('selectAllBtn');
         if (selectAllBtn) {
             selectAllBtn.addEventListener('click', () => this.toggleSelectAll());
@@ -270,7 +325,9 @@ class MediaShareApp {
             const data = await response.json();
             
             if (!response.ok) {
-                throw new Error(data.message || '请求失败');
+                const detail = data && (data.error || data.detail) ? String(data.error || data.detail) : '';
+                const msg = data && data.message ? String(data.message) : '请求失败';
+                throw new Error(detail && !msg.includes(detail) ? `${msg}: ${detail}` : msg);
             }
             
             return data;
@@ -684,14 +741,12 @@ class MediaShareApp {
         
         return `
             <div class="masonry-item">
-                <div class="content-card glass-effect rounded-xl p-4 shadow-sm" data-content-id="${content.id}">
+                <div class="content-card glass-effect rounded-xl p-4 shadow-sm border border-gray-200" data-content-id="${content.id}">
                     ${preview}
                     <div class="mt-3 flex items-center justify-between">
                         <span class="text-sm text-gray-500">${timeAgo}</span>
                         <button class="delete-btn p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" data-content-id="${content.id}">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                            </svg>
+                            ${this.svgIcon('trash', 'w-4 h-4')}
                         </button>
                     </div>
                 </div>
@@ -705,7 +760,7 @@ class MediaShareApp {
         
         return `
             <div class="masonry-item">
-                <div class="checkbox-wrapper content-card glass-effect rounded-xl p-4 shadow-sm" data-content-id="${content.id}">
+                <div class="checkbox-wrapper content-card glass-effect rounded-xl p-4 shadow-sm border border-gray-200" data-content-id="${content.id}">
                     <input type="checkbox" value="${content.id}">
                     ${preview}
                     <div class="mt-3 flex items-center justify-between">
@@ -733,10 +788,8 @@ class MediaShareApp {
                 <div class="${isModal ? 'max-h-[70vh] flex justify-center' : 'aspect-square'} bg-gray-100 rounded-lg overflow-hidden mb-3 relative group">
                     <img src="${content.data}" alt="图片" class="${isModal ? 'max-w-full max-h-full object-contain' : 'w-full h-full object-cover'}">
                     <div class="absolute top-2 right-2 flex items-center justify-center">
-                        <a href="${content.data}" download="${content.filename || 'download'}" class="p-3 bg-white bg-opacity-95 rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" title="下载图片" onclick="event.stopPropagation()">
-                            <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                            </svg>
+                        <a href="${content.data}" download="${content.filename || 'download'}" class="p-3 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" style="background: rgba(255,255,255,0.95);" title="下载图片" onclick="event.stopPropagation()">
+                            ${this.svgIcon('download', 'w-6 h-6 text-blue-600')}
                         </a>
                     </div>
                 </div>
@@ -744,9 +797,7 @@ class MediaShareApp {
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm ${isModal ? '' : 'line-clamp-3'} flex-1">${content.text}</p>
                         <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                            </svg>
+                            ${this.svgIcon('copy', 'w-5 h-5')}
                         </button>
                     </div>
                 ` : ''}
@@ -773,15 +824,11 @@ class MediaShareApp {
                         </div>
                         <div class="flex items-center space-x-2">
                             <button onclick="window.app.optimizeVideo('${content.id}', event)" class="flex items-center space-x-1 px-3 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 transition-colors active:scale-95" title="如果视频无法播放，请尝试优化兼容性">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                                </svg>
+                                ${this.svgIcon('bolt', 'w-4 h-4')}
                                 <span class="text-xs font-bold">转码兼容模式</span>
                             </button>
                             <a href="${content.data}" download="${content.filename || 'download'}" class="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm active:scale-95">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                                </svg>
+                                ${this.svgIcon('download', 'w-4 h-4')}
                                 <span class="text-xs font-medium">下载</span>
                             </a>
                         </div>
@@ -790,9 +837,7 @@ class MediaShareApp {
                         <div class="flex items-start justify-between gap-2 p-1">
                             <p class="text-gray-700 text-sm whitespace-pre-wrap flex-1">${content.text}</p>
                             <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                                </svg>
+                                ${this.svgIcon('copy', 'w-5 h-5')}
                             </button>
                         </div>
                     ` : ''}
@@ -800,17 +845,15 @@ class MediaShareApp {
             } else {
                 return `
                     <div class="aspect-video bg-gray-100 rounded-lg overflow-hidden mb-3 relative group">
-                        <video src="${content.data}#t=0.001" class="w-full h-full object-cover" muted preload="metadata" playsinline></video>
-                        <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 group-hover:bg-opacity-20 transition-all">
-                            <div class="w-12 h-12 bg-white bg-opacity-30 rounded-full flex items-center justify-center backdrop-blur-sm group-hover:scale-110 transition-transform">
+                        <div class="w-full h-full bg-gradient-to-br from-gray-900 via-gray-700 to-gray-900"></div>
+                        <div class="absolute inset-0 flex items-center justify-center bg-black transition-all" style="background: rgba(0,0,0,0.25);">
+                            <div class="w-12 h-12 bg-white rounded-full flex items-center justify-center backdrop-blur-sm group-hover:scale-110 transition-transform" style="background: rgba(255,255,255,0.28);">
                                 <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
                                     <path d="M8 5v14l11-7z"/>
                                 </svg>
                             </div>
-                            <a href="${content.data}" download="${content.filename || 'download'}" class="absolute top-2 right-2 p-3 bg-white bg-opacity-95 rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" title="下载视频" onclick="event.stopPropagation()">
-                                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                                </svg>
+                            <a href="${content.data}" download="${content.filename || 'download'}" class="absolute top-2 right-2 p-3 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" style="background: rgba(255,255,255,0.95);" title="下载视频" onclick="event.stopPropagation()">
+                                ${this.svgIcon('download', 'w-6 h-6 text-blue-600')}
                             </a>
                         </div>
                     </div>
@@ -818,9 +861,7 @@ class MediaShareApp {
                         <div class="flex items-start justify-between gap-2">
                             <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
                             <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                                </svg>
+                                ${this.svgIcon('copy', 'w-5 h-5')}
                             </button>
                         </div>
                     ` : ''}
@@ -828,30 +869,24 @@ class MediaShareApp {
             }
         } else if (content.type === 'audio') {
             return `
-                <div class="p-4 bg-orange-50 rounded-xl mb-3 relative group border border-orange-100">
+                <div class="p-4 bg-orange-50 rounded-xl mb-3 relative group border border-orange-500">
                     <div class="flex items-center space-x-4 mb-3">
                         <div class="w-12 h-12 bg-orange-500 rounded-full flex items-center justify-center flex-shrink-0 shadow-lg animate-pulse">
-                            <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
-                            </svg>
+                            ${this.svgIcon('music', 'w-6 h-6 text-white')}
                         </div>
                         <div class="flex-1 min-w-0">
                             <p class="text-orange-900 font-bold truncate text-sm">${content.filename || '音频文件'}</p>
                             <p class="text-orange-600 text-xs">${this.formatFileSize(content.size)}</p>
                         </div>
                     </div>
-                    <audio src="${content.data}" controls class="w-full h-8 mb-3"></audio>
+                    <audio src="${content.data}" controls preload="none" class="w-full h-8 mb-3"></audio>
                     <div class="flex items-center justify-between space-x-2">
                         <button onclick="window.app.convertToVideo('${content.id}', event)" class="flex-1 py-2 bg-orange-600 text-white rounded-lg text-xs font-bold hover:bg-orange-700 active:scale-95 transition-all shadow-md flex items-center justify-center space-x-1">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                            </svg>
+                            ${this.svgIcon('video', 'w-4 h-4')}
                             <span>导出 MP4</span>
                         </button>
                         <a href="${content.data}" download="${content.filename || 'audio'}" class="p-2 bg-white rounded-lg shadow-md border border-orange-100 text-orange-600 hover:scale-105 active:scale-95 transition-all" title="下载音频">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                            </svg>
+                            ${this.svgIcon('download', 'w-5 h-5')}
                         </a>
                     </div>
                 </div>
@@ -859,20 +894,16 @@ class MediaShareApp {
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
                         <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                            </svg>
+                            ${this.svgIcon('copy', 'w-5 h-5')}
                         </button>
                     </div>
                 ` : ''}
             `;
         } else if (content.type === 'file') {
             return `
-                <div class="p-4 bg-blue-50 rounded-xl mb-3 relative group border border-blue-100 flex items-center space-x-4">
+                <div class="p-4 bg-blue-50 rounded-xl mb-3 relative group border border-blue-200 flex items-center space-x-4">
                     <div class="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg">
-                        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
-                        </svg>
+                        ${this.svgIcon('file', 'w-7 h-7 text-white')}
                     </div>
                     <div class="flex-1 min-w-0">
                         <p class="text-blue-900 font-bold truncate text-sm mb-0.5">${content.filename || '未知文件'}</p>
@@ -880,9 +911,7 @@ class MediaShareApp {
                     </div>
                     <div class="flex items-center space-x-1">
                         <a href="${content.data}" download="${content.filename || 'download'}" class="p-2.5 bg-white rounded-full shadow-md hover:scale-110 active:scale-95 transition-all border border-blue-100" title="下载文件" onclick="event.stopPropagation()">
-                            <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                            </svg>
+                            ${this.svgIcon('download', 'w-5 h-5 text-blue-600')}
                         </a>
                     </div>
                 </div>
@@ -890,21 +919,17 @@ class MediaShareApp {
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
                         <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                            </svg>
+                            ${this.svgIcon('copy', 'w-5 h-5')}
                         </button>
                     </div>
                 ` : ''}
             `;
         } else {
             return `
-                <div class="p-5 bg-gray-50 rounded-xl mb-3 relative group border border-gray-100">
+                <div class="p-5 bg-gray-50 rounded-xl mb-3 relative group border border-gray-200">
                     <p class="text-gray-800 whitespace-pre-wrap leading-relaxed ${isModal ? '' : 'line-clamp-5 text-sm'}">${content.text}</p>
-                    <button onclick="window.app.copyText('${escapedText}', event)" class="absolute bottom-2 right-2 p-3 bg-white bg-opacity-95 border border-gray-200 rounded-lg shadow-md hover:bg-gray-50 active:scale-90 transition-all text-blue-600 flex items-center space-x-1" title="复制文本">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
-                        </svg>
+                    <button onclick="window.app.copyText('${escapedText}', event)" class="absolute bottom-2 right-2 p-3 bg-white border border-gray-200 rounded-lg shadow-md hover:bg-gray-50 active:scale-90 transition-all text-blue-600 flex items-center space-x-1" style="background: rgba(255,255,255,0.95);" title="复制文本">
+                        ${this.svgIcon('copy', 'w-5 h-5')}
                         <span class="text-xs font-bold">复制全文</span>
                     </button>
                 </div>
@@ -1173,7 +1198,7 @@ class MediaShareApp {
                 reader.onload = (e) => {
                     previewItem.innerHTML = `
                         <video src="${e.target.result}" class="w-full h-full object-cover" muted></video>
-                        <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30">
+                        <div class="absolute inset-0 flex items-center justify-center bg-black" style="background: rgba(0,0,0,0.30);">
                             <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
                                 <path d="M8 5v14l11-7z"/>
                             </svg>
@@ -1187,9 +1212,7 @@ class MediaShareApp {
                 reader.onload = (e) => {
                     previewItem.innerHTML = `
                         <div class="w-full h-full flex flex-col items-center justify-center p-2 bg-orange-50">
-                            <svg class="w-10 h-10 text-orange-500 mb-2 animate-bounce" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
-                            </svg>
+                            ${this.svgIcon('music', 'w-10 h-10 text-orange-500 mb-2 animate-bounce')}
                             <p class="text-[10px] text-orange-800 font-bold truncate w-full text-center px-1">${file.name}</p>
                         </div>
                         <button class="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs hover:bg-red-600 shadow-md flex items-center justify-center" onclick="window.app.removeFileToUpload(${fileIndex}, this.parentElement)">×</button>
@@ -1200,9 +1223,7 @@ class MediaShareApp {
                 // 其他文件类型的预览
                 previewItem.innerHTML = `
                     <div class="w-full h-full flex flex-col items-center justify-center p-2 bg-blue-50">
-                        <svg class="w-10 h-10 text-blue-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
-                        </svg>
+                        ${this.svgIcon('file', 'w-10 h-10 text-blue-500 mb-2')}
                         <p class="text-[10px] text-blue-800 font-bold truncate w-full text-center px-1">${file.name}</p>
                     </div>
                     <button class="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs hover:bg-red-600 shadow-md flex items-center justify-center" onclick="window.app.removeFileToUpload(${fileIndex}, this.parentElement)">×</button>
@@ -1364,6 +1385,212 @@ class MediaShareApp {
             modal.classList.add('hidden');
         }
         this.currentContentId = null;
+    }
+
+    // TTS 模态框方法
+    openTTSModal() {
+        const modal = document.getElementById('ttsModal');
+        const textInput = document.getElementById('textInput'); // 主输入框
+        const ttsTextInput = document.getElementById('ttsTextInput'); // TTS 输入框
+        
+        if (modal && ttsTextInput) {
+            // 如果主输入框有内容，自动填充
+            if (textInput && textInput.value.trim()) {
+                ttsTextInput.value = textInput.value.trim();
+            }
+            this.refreshTtsVoices({ silent: true });
+            modal.classList.remove('hidden');
+            ttsTextInput.focus();
+        }
+    }
+
+    closeTTSModal() {
+        const modal = document.getElementById('ttsModal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+
+    async refreshTtsVoices({ silent } = {}) {
+        const status = document.getElementById('ttsVoicesStatus');
+        try {
+            if (status) status.textContent = '加载中...';
+            const resp = await this.apiRequest('/tts/voices');
+            const builtin = (resp.data && Array.isArray(resp.data.builtin)) ? resp.data.builtin : [];
+            const custom = (resp.data && Array.isArray(resp.data.custom)) ? resp.data.custom : [];
+            this.renderTtsVoiceSelect(builtin, custom);
+            this.renderCustomTtsVoices(custom);
+            if (status) status.textContent = `已加载 ${builtin.length + custom.length} 个`;
+        } catch (e) {
+            if (status) status.textContent = '';
+            if (!silent) this.showNotification('获取音色列表失败: ' + e.message, 'error');
+        }
+    }
+
+    renderTtsVoiceSelect(builtin, custom) {
+        const select = document.getElementById('ttsVoiceSelect');
+        if (!select) return;
+
+        const makeOption = (v) => {
+            const label = v.name ? `${v.name} (${v.id})` : v.id;
+            return `<option value="${this.escapeHtml(v.id)}">${this.escapeHtml(label)}</option>`;
+        };
+
+        const groupBy = (arr) => {
+            const map = {};
+            for (const v of arr) {
+                const g = v.group || '其他';
+                if (!map[g]) map[g] = [];
+                map[g].push(v);
+            }
+            return map;
+        };
+
+        const customGroup = custom.length ? `<optgroup label="我的音色">${custom.map(makeOption).join('')}</optgroup>` : '';
+        const builtinGroups = groupBy(builtin);
+        const builtinHtml = Object.keys(builtinGroups).map((g) => `<optgroup label="${this.escapeHtml(g)}">${builtinGroups[g].map(makeOption).join('')}</optgroup>`).join('');
+
+        select.innerHTML = `${customGroup}${builtinHtml}`;
+    }
+
+    renderCustomTtsVoices(custom) {
+        const container = document.getElementById('ttsCustomVoicesList');
+        if (!container) return;
+        if (!custom || custom.length === 0) {
+            container.innerHTML = `<div class="text-xs text-gray-500">暂无自定义音色</div>`;
+            return;
+        }
+
+        container.innerHTML = custom.map((v) => {
+            const label = v.name ? `${v.name}` : v.id;
+            return `
+                <div class="flex items-center justify-between bg-white rounded-lg border border-gray-200 px-3 py-2">
+                    <div class="min-w-0">
+                        <div class="text-sm font-semibold text-gray-800 truncate">${this.escapeHtml(label)}</div>
+                        <div class="text-xs text-gray-500 truncate">${this.escapeHtml(v.id)}</div>
+                    </div>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <button class="text-xs font-medium text-purple-700 hover:text-purple-900 underline" onclick="window.app.useTtsVoice('${this.escapeJs(v.id)}', event)">使用</button>
+                        <button class="text-xs font-medium text-red-600 hover:text-red-700 underline" onclick="window.app.deleteTtsVoice('${this.escapeJs(v.id)}', event)">删除</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    useTtsVoice(id, event) {
+        if (event) event.stopPropagation();
+        const voiceCustom = document.getElementById('ttsVoiceCustom');
+        if (voiceCustom) voiceCustom.value = id;
+        this.showNotification('已选择音色: ' + id, 'success');
+    }
+
+    async addTtsVoice() {
+        const idInput = document.getElementById('ttsNewVoiceId');
+        const nameInput = document.getElementById('ttsNewVoiceName');
+        const voiceId = idInput ? idInput.value.trim() : '';
+        const name = nameInput ? nameInput.value.trim() : '';
+
+        if (!voiceId) {
+            this.showNotification('请填写音色ID', 'warning');
+            return;
+        }
+
+        try {
+            await this.apiRequest('/tts/voices', {
+                method: 'POST',
+                body: JSON.stringify({ id: voiceId, name, group: '我的音色' })
+            });
+            if (idInput) idInput.value = '';
+            if (nameInput) nameInput.value = '';
+            await this.refreshTtsVoices({ silent: true });
+            this.showNotification('已添加音色', 'success');
+        } catch (e) {
+            this.showNotification('添加失败: ' + e.message, 'error');
+        }
+    }
+
+    async deleteTtsVoice(id, event) {
+        if (event) event.stopPropagation();
+        try {
+            await this.apiRequest(`/tts/voices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            await this.refreshTtsVoices({ silent: true });
+            this.showNotification('已删除音色', 'success');
+        } catch (e) {
+            this.showNotification('删除失败: ' + e.message, 'error');
+        }
+    }
+
+    escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
+    }
+
+    escapeJs(str) {
+        return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    }
+
+    async generateTTS() {
+        if (!this.isOnline) {
+            this.showNotification('离线模式下无法使用 AI 功能', 'warning');
+            return;
+        }
+
+        const textInput = document.getElementById('ttsTextInput');
+        const voiceSelect = document.getElementById('ttsVoiceSelect');
+        const voiceCustom = document.getElementById('ttsVoiceCustom');
+        const speedRange = document.getElementById('ttsSpeedRange');
+        const emotionSelect = document.getElementById('ttsEmotionSelect');
+        const emotionScaleRange = document.getElementById('ttsEmotionScaleRange');
+        const btn = document.getElementById('generateTTSBtn');
+        const btnText = document.getElementById('ttsBtnText');
+        const loading = document.getElementById('ttsLoading');
+
+        const text = textInput.value.trim();
+        if (!text) {
+            this.showNotification('请输入要合成的文本', 'warning');
+            textInput.focus();
+            return;
+        }
+
+        try {
+            // UI Loading 状态
+            btn.disabled = true;
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            btnText.textContent = '生成中...';
+            loading.classList.remove('hidden');
+
+            const response = await this.apiRequest('/tts', {
+                method: 'POST',
+                body: JSON.stringify({
+                    text: text,
+                    voice_type: (voiceCustom && voiceCustom.value.trim()) ? voiceCustom.value.trim() : voiceSelect.value,
+                    speed_ratio: speedRange.value,
+                    emotion: emotionSelect ? emotionSelect.value : '',
+                    emotion_scale: emotionScaleRange ? emotionScaleRange.value : ''
+                })
+            });
+
+            this.showNotification('语音生成成功！', 'success');
+            this.closeTTSModal();
+            
+            // 刷新列表
+            await this.loadContents();
+            this.renderContents();
+            
+            // 清空输入
+            textInput.value = '';
+            if (voiceCustom) voiceCustom.value = '';
+
+        } catch (error) {
+            console.error('TTS 生成失败:', error);
+            this.showNotification('生成失败: ' + error.message, 'error');
+        } finally {
+            // 恢复 UI 状态
+            btn.disabled = false;
+            btn.classList.remove('opacity-75', 'cursor-not-allowed');
+            btnText.textContent = '开始生成';
+            loading.classList.add('hidden');
+        }
     }
     
     showDeleteModal(contentId) {
@@ -1756,9 +1983,7 @@ class MediaShareApp {
             message.innerText = '此操作将永久删除服务器上的所有内容和本地设置，且不可恢复。确定要继续吗？';
             icon.className = 'w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4';
             icon.innerHTML = `
-                <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                </svg>
+                ${this.svgIcon('trash', 'w-8 h-8 text-red-600')}
             `;
             modal.classList.remove('hidden');
         }
@@ -1821,6 +2046,12 @@ function closeConfirmModal() {
     const modal = document.getElementById('confirmModal');
     if (modal) {
         modal.classList.add('hidden');
+    }
+}
+
+function closeTTSModal() {
+    if (window.app) {
+        window.app.closeTTSModal();
     }
 }
 

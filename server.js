@@ -5,6 +5,15 @@ const fs = require('fs').promises;
 const { exec } = require('child_process');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
+
+const VOLC_TTS_APP_ID = process.env.VOLC_TTS_APP_ID || '';
+const VOLC_TTS_ACCESS_KEY = process.env.VOLC_TTS_ACCESS_KEY || '';
+const VOLC_TTS_RESOURCE_ID_V2 = process.env.VOLC_TTS_RESOURCE_ID_V2 || 'seed-tts-2.0';
+const VOLC_TTS_RESOURCE_ID_V1 = process.env.VOLC_TTS_RESOURCE_ID_V1 || 'seed-tts-1.0';
+const VOLC_TTS_RESOURCE_ID_ICL1 = process.env.VOLC_TTS_RESOURCE_ID_ICL1 || 'seed-icl-1.0';
+const VOLC_TTS_RESOURCE_ID_ICL2 = process.env.VOLC_TTS_RESOURCE_ID_ICL2 || 'seed-icl-2.0';
+const VOLC_TTS_MODEL_V2 = process.env.VOLC_TTS_MODEL_V2 || '';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +65,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // 数据文件路径
 const CONTENTS_FILE = path.join(DATA_DIR, 'contents.json');
 const DELETED_FILE = path.join(DATA_DIR, 'deleted.json');
+const TTS_VOICES_FILE = path.join(DATA_DIR, 'tts_voices.json');
 
 // 读取数据文件
 async function readDataFile(filename, defaultValue = []) {
@@ -79,6 +89,276 @@ async function writeDataFile(filename, data) {
         console.error('写入文件失败:', error);
         throw error;
     }
+}
+
+function getVolcResourceIdBySpeaker(speaker) {
+    if (typeof speaker !== 'string') return VOLC_TTS_RESOURCE_ID_V2;
+    const s = speaker.trim();
+    if (!s) return VOLC_TTS_RESOURCE_ID_V2;
+    if (s.startsWith('saturn_')) return VOLC_TTS_RESOURCE_ID_ICL2;
+    if (s.startsWith('seed_')) return VOLC_TTS_RESOURCE_ID_ICL2;
+    if (s.startsWith('ICL_') || s.startsWith('icl_')) return VOLC_TTS_RESOURCE_ID_V1;
+    if (s.includes('_mars_bigtts')) return VOLC_TTS_RESOURCE_ID_V1;
+    return VOLC_TTS_RESOURCE_ID_V2;
+}
+
+function getBuiltInTtsVoices() {
+    return [
+        { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', group: '通用 2.0' },
+        { id: 'zh_female_xiaohe_uranus_bigtts', name: '小何 2.0', group: '通用 2.0' },
+        { id: 'zh_male_m191_uranus_bigtts', name: '云舟 2.0', group: '通用 2.0' },
+        { id: 'zh_male_taocheng_uranus_bigtts', name: '小天 2.0', group: '通用 2.0' },
+        { id: 'zh_female_xueayi_saturn_bigtts', name: '雪阿姨', group: '特色' },
+        { id: 'zh_male_dayi_saturn_bigtts', name: '大壹', group: '特色' },
+        { id: 'saturn_zh_female_keainvsheng_tob', name: '可爱女生', group: '角色扮演' },
+        { id: 'saturn_zh_female_tiaopigongzhu_tob', name: '调皮公主', group: '角色扮演' },
+        { id: 'saturn_zh_male_shuanglangshaonian_tob', name: '爽朗少年', group: '角色扮演' },
+        { id: 'saturn_zh_male_tiancaitongzhuo_tob', name: '天才同桌', group: '角色扮演' },
+        { id: 'saturn_zh_female_cancan_tob', name: '知性灿灿', group: '角色扮演' }
+    ];
+}
+
+function normalizeVoiceRecord(v) {
+    if (!v || typeof v !== 'object') return null;
+    const id = typeof v.id === 'string' ? v.id.trim() : '';
+    if (!id || id.length > 200) return null;
+    const name = typeof v.name === 'string' ? v.name.trim() : '';
+    const group = typeof v.group === 'string' ? v.group.trim() : '';
+    return { id, name, group };
+}
+
+async function readCustomTtsVoices() {
+    const list = await readDataFile(TTS_VOICES_FILE, []);
+    if (!Array.isArray(list)) return [];
+    return list.map(normalizeVoiceRecord).filter(Boolean);
+}
+
+async function writeCustomTtsVoices(list) {
+    const normalized = Array.isArray(list) ? list.map(normalizeVoiceRecord).filter(Boolean) : [];
+    await writeDataFile(TTS_VOICES_FILE, normalized);
+    return normalized;
+}
+
+function extractAudioBase64FromChunk(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (typeof obj.audio === 'string') return obj.audio;
+    if (typeof obj.audio_data === 'string') return obj.audio_data;
+    if (typeof obj.data === 'string') return obj.data;
+    if (obj.data && typeof obj.data === 'object') {
+        if (typeof obj.data.audio === 'string') return obj.data.audio;
+        if (typeof obj.data.audio_data === 'string') return obj.data.audio_data;
+        if (typeof obj.data.data === 'string') return obj.data.data;
+    }
+    if (obj.result && typeof obj.result === 'object') {
+        if (typeof obj.result.audio === 'string') return obj.result.audio;
+        if (typeof obj.result.audio_data === 'string') return obj.result.audio_data;
+        if (typeof obj.result.data === 'string') return obj.result.data;
+    }
+    return null;
+}
+
+function normalizeJsonLine(line) {
+    if (!line) return '';
+    const trimmed = String(line).trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('data:')) return trimmed.slice(5).trim();
+    return trimmed;
+}
+
+function speedRatioToSpeechRate(speedRatio) {
+    const r = Number(speedRatio);
+    if (!Number.isFinite(r)) return undefined;
+    const clamped = Math.max(0.5, Math.min(2.0, r));
+    const speechRate = Math.round((clamped - 1.0) * 100);
+    return Math.max(-50, Math.min(100, speechRate));
+}
+
+function isVolcResourceMismatchPayload(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    const code = obj.code;
+    const msg = typeof obj.message === 'string' ? obj.message : '';
+    return code === 55000000 || /resource id is mismatched/i.test(msg);
+}
+
+function buildResourceIdCandidates(speaker) {
+    const candidates = [
+        getVolcResourceIdBySpeaker(speaker),
+        VOLC_TTS_RESOURCE_ID_ICL2,
+        VOLC_TTS_RESOURCE_ID_ICL1,
+        VOLC_TTS_RESOURCE_ID_V2,
+        VOLC_TTS_RESOURCE_ID_V1
+    ].filter((x) => typeof x === 'string' && x.trim());
+    return Array.from(new Set(candidates));
+}
+
+async function volcTtsV3ToBufferOnce({
+    text,
+    speaker,
+    audioFormat,
+    sampleRate,
+    emotion,
+    emotionScale,
+    speedRatio,
+    speedMode,
+    resourceId
+}) {
+    const url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
+    const requestId = uuidv4();
+
+    const payload = {
+        user: { uid: 'user_1' },
+        namespace: 'BidirectionalTTS',
+        req_params: {
+            text,
+            speaker,
+            audio_params: {
+                format: audioFormat,
+                sample_rate: sampleRate
+            }
+        }
+    };
+
+    if (VOLC_TTS_MODEL_V2 && resourceId === VOLC_TTS_RESOURCE_ID_V2) {
+        payload.req_params.model = VOLC_TTS_MODEL_V2;
+    }
+
+    if (emotion) {
+        payload.req_params.audio_params.emotion = emotion;
+    }
+    if (emotionScale) {
+        payload.req_params.audio_params.emotion_scale = emotionScale;
+    }
+    if (typeof speedRatio === 'number' && Number.isFinite(speedRatio)) {
+        if (speedMode === 'speed_ratio') {
+            payload.req_params.audio_params.speed_ratio = speedRatio;
+        } else if (speedMode === 'speech_rate') {
+            payload.req_params.audio_params.speech_rate = speedRatioToSpeechRate(speedRatio);
+        }
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Api-App-Id': VOLC_TTS_APP_ID,
+        'X-Api-App-Key': VOLC_TTS_APP_ID,
+        'X-Api-Access-Key': VOLC_TTS_ACCESS_KEY,
+        'X-Api-Resource-Id': resourceId,
+        'X-Api-Request-Id': requestId
+    };
+
+    const response = await axios.post(url, payload, {
+        headers,
+        responseType: 'stream',
+        timeout: 120000,
+        validateStatus: () => true
+    });
+    const ttLogId = response && response.headers ? (response.headers['x-tt-logid'] || response.headers['X-Tt-Logid']) : '';
+
+    if (response.status < 200 || response.status >= 300) {
+        const errText = await new Promise((resolve) => {
+            let buf = '';
+            response.data.on('data', (chunk) => {
+                buf += chunk.toString('utf8');
+                if (buf.length > 4000) {
+                    buf = buf.slice(0, 4000);
+                    response.data.destroy();
+                }
+            });
+            response.data.on('end', () => resolve(buf));
+            response.data.on('error', () => resolve(buf));
+        });
+        throw new Error(`TTS 请求失败(${response.status})${ttLogId ? ` logid=${ttLogId}` : ''}: ${errText || 'unknown'}`);
+    }
+
+    const audioBuffers = [];
+    let textBuffer = '';
+    let lastJson = null;
+
+    await new Promise((resolve, reject) => {
+        response.data.on('data', (chunk) => {
+            textBuffer += chunk.toString('utf8');
+            const lines = textBuffer.split('\n');
+            textBuffer = lines.pop() || '';
+
+            for (const rawLine of lines) {
+                const line = normalizeJsonLine(rawLine);
+                if (!line) continue;
+                let obj;
+                try {
+                    obj = JSON.parse(line);
+                } catch {
+                    continue;
+                }
+                lastJson = obj;
+                const audioB64 = extractAudioBase64FromChunk(obj);
+                if (typeof audioB64 === 'string' && audioB64.length > 0) {
+                    try {
+                        audioBuffers.push(Buffer.from(audioB64, 'base64'));
+                    } catch {
+                        continue;
+                    }
+                }
+            }
+        });
+        response.data.on('end', resolve);
+        response.data.on('error', reject);
+    });
+
+    if (textBuffer.trim()) {
+        try {
+            const obj = JSON.parse(normalizeJsonLine(textBuffer));
+            lastJson = obj;
+            const audioB64 = extractAudioBase64FromChunk(obj);
+            if (typeof audioB64 === 'string' && audioB64.length > 0) {
+                audioBuffers.push(Buffer.from(audioB64, 'base64'));
+            }
+        } catch {}
+    }
+
+    if (audioBuffers.length === 0) {
+        const mismatch = isVolcResourceMismatchPayload(lastJson);
+        throw new Error(`${mismatch ? 'TTS 资源ID与音色不匹配' : 'TTS 无音频数据返回'}${ttLogId ? ` logid=${ttLogId}` : ''}: ${lastJson ? JSON.stringify(lastJson).slice(0, 800) : 'empty'}`);
+    }
+
+    return Buffer.concat(audioBuffers);
+}
+
+async function volcTtsV3ToBuffer({
+    text,
+    speaker,
+    audioFormat,
+    sampleRate,
+    emotion,
+    emotionScale,
+    speedRatio,
+    speedMode
+}) {
+    const candidates = buildResourceIdCandidates(speaker);
+    let lastError = null;
+
+    for (const resourceId of candidates) {
+        try {
+            return await volcTtsV3ToBufferOnce({
+                text,
+                speaker,
+                audioFormat,
+                sampleRate,
+                emotion,
+                emotionScale,
+                speedRatio,
+                speedMode,
+                resourceId
+            });
+        } catch (err) {
+            lastError = err;
+            const msg = String(err && err.message ? err.message : '');
+            const mayBeMismatch = /resource ID is mismatched with speaker related resource/i.test(msg) || /资源ID与音色不匹配/.test(msg);
+            if (mayBeMismatch) continue;
+            throw err;
+        }
+    }
+
+    if (lastError) throw lastError;
+    throw new Error('TTS 请求失败: unknown');
 }
 
 // 获取所有内容
@@ -567,6 +847,109 @@ app.post('/api/audio/to-mp4', async (req, res) => {
     }
 });
 
+// 文本转语音 (TTS)
+app.post('/api/tts', async (req, res) => {
+    try {
+        const { text, voice_type = 'zh_female_vv_uranus_bigtts', speed_ratio = 1.0, emotion, emotion_scale } = req.body;
+        
+        if (!text || !String(text).trim()) {
+            return res.status(400).json({ success: false, message: '请提供文本内容' });
+        }
+
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_KEY) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎TTS鉴权信息' });
+        }
+
+        const reqId = uuidv4();
+        const outputFilename = `tts-${reqId}.mp3`;
+        const outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+        const speedRatioNumber = Math.max(0.5, Math.min(2.0, Number(speed_ratio)));
+        const emotionScaleNumberRaw = Number(emotion_scale);
+        const emotionScaleNumber = Number.isFinite(emotionScaleNumberRaw) && emotionScaleNumberRaw >= 1 && emotionScaleNumberRaw <= 5 ? emotionScaleNumberRaw : undefined;
+
+        let audioBuffer;
+        try {
+            audioBuffer = await volcTtsV3ToBuffer({
+                text: String(text).trim(),
+                speaker: voice_type,
+                audioFormat: 'mp3',
+                sampleRate: 24000,
+                emotion: typeof emotion === 'string' && emotion.trim() ? emotion.trim() : undefined,
+                emotionScale: emotionScaleNumber,
+                speedRatio: Number.isFinite(speedRatioNumber) ? speedRatioNumber : undefined,
+                speedMode: 'speech_rate'
+            });
+        } catch (err) {
+            const speedlessErr = String(err && err.message ? err.message : '');
+            const mayBeUnknownParam = /unknown|invalid|not support|不支持|参数/i.test(speedlessErr);
+            if (!mayBeUnknownParam) throw err;
+            try {
+                audioBuffer = await volcTtsV3ToBuffer({
+                    text: String(text).trim(),
+                    speaker: voice_type,
+                    audioFormat: 'mp3',
+                    sampleRate: 24000,
+                    emotion: typeof emotion === 'string' && emotion.trim() ? emotion.trim() : undefined,
+                    emotionScale: emotionScaleNumber,
+                    speedRatio: Number.isFinite(speedRatioNumber) ? speedRatioNumber : undefined,
+                    speedMode: 'speed_ratio'
+                });
+            } catch (err2) {
+                audioBuffer = await volcTtsV3ToBuffer({
+                    text: String(text).trim(),
+                    speaker: voice_type,
+                    audioFormat: 'mp3',
+                    sampleRate: 24000,
+                    emotion: typeof emotion === 'string' && emotion.trim() ? emotion.trim() : undefined,
+                    emotionScale: emotionScaleNumber
+                });
+            }
+        }
+
+        await fs.writeFile(outputPath, audioBuffer);
+        
+        const stats = await fs.stat(outputPath);
+
+        // 保存到数据库
+        const contents = await readDataFile(CONTENTS_FILE);
+        
+        const displayText = String(text).trim();
+        const displayPrefix = displayText.length > 80 ? `${displayText.slice(0, 80)}...` : displayText;
+
+        const newAudioContent = {
+            id: uuidv4(),
+            type: 'audio',
+            text: `[AI语音] ${displayPrefix}`,
+            data: `/uploads/${outputFilename}`,
+            filename: `tts-${displayText.slice(0, 10)}.mp3`,
+            size: stats.size,
+            mimetype: 'audio/mpeg',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        contents.unshift(newAudioContent);
+        await writeDataFile(CONTENTS_FILE, contents);
+
+        res.json({
+            success: true,
+            message: '语音生成成功',
+            data: newAudioContent
+        });
+
+    } catch (error) {
+        console.error('TTS 生成失败:', error && error.message ? error.message : error);
+        const detail = error && error.message ? String(error.message) : '';
+        const shouldExpose = /^TTS\s/.test(detail) || /logid=/.test(detail);
+        res.status(500).json({ 
+            success: false, 
+            message: shouldExpose ? detail : '语音生成失败，请检查 API 配置或网络连接',
+            error: detail || 'API Error'
+        });
+    }
+});
+
 // 健康检查
 app.get('/api/health', (req, res) => {
     res.json({
@@ -574,6 +957,88 @@ app.get('/api/health', (req, res) => {
         message: '服务正常运行',
         timestamp: new Date().toISOString()
     });
+});
+
+app.get('/api/tts/status', (req, res) => {
+    const mask = (s) => {
+        if (!s) return '';
+        const str = String(s);
+        if (str.length <= 8) return '***';
+        return `${str.slice(0, 3)}***${str.slice(-3)}`;
+    };
+
+    res.json({
+        success: true,
+        data: {
+            configured: Boolean(VOLC_TTS_APP_ID && VOLC_TTS_ACCESS_KEY),
+            appId: mask(VOLC_TTS_APP_ID),
+            accessKey: mask(VOLC_TTS_ACCESS_KEY),
+            resourceIdV2: VOLC_TTS_RESOURCE_ID_V2,
+            resourceIdV1: VOLC_TTS_RESOURCE_ID_V1,
+            resourceIdIcl1: VOLC_TTS_RESOURCE_ID_ICL1,
+            resourceIdIcl2: VOLC_TTS_RESOURCE_ID_ICL2,
+            modelV2: VOLC_TTS_MODEL_V2 || ''
+        }
+    });
+});
+
+app.get('/api/tts/voices', async (req, res) => {
+    try {
+        const builtin = getBuiltInTtsVoices().map((v) => ({
+            ...v,
+            resourceId: getVolcResourceIdBySpeaker(v.id)
+        }));
+        const custom = await readCustomTtsVoices();
+        const customWithResource = custom.map((v) => ({
+            ...v,
+            resourceId: getVolcResourceIdBySpeaker(v.id)
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                builtin,
+                custom: customWithResource
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '获取音色列表失败' });
+    }
+});
+
+app.post('/api/tts/voices', async (req, res) => {
+    try {
+        const record = normalizeVoiceRecord(req.body || {});
+        if (!record) {
+            return res.status(400).json({ success: false, message: '音色信息不合法' });
+        }
+
+        const current = await readCustomTtsVoices();
+        const existsIndex = current.findIndex((x) => x.id === record.id);
+        if (existsIndex >= 0) {
+            current[existsIndex] = { ...current[existsIndex], ...record };
+        } else {
+            current.unshift(record);
+        }
+
+        const saved = await writeCustomTtsVoices(current);
+        res.json({ success: true, message: '已保存', data: saved });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '保存音色失败' });
+    }
+});
+
+app.delete('/api/tts/voices/:id', async (req, res) => {
+    try {
+        const id = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+        if (!id) return res.status(400).json({ success: false, message: '缺少音色ID' });
+        const current = await readCustomTtsVoices();
+        const next = current.filter((x) => x.id !== id);
+        await writeCustomTtsVoices(next);
+        res.json({ success: true, message: '已删除' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '删除音色失败' });
+    }
 });
 
 // 错误处理中间件

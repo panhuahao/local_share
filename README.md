@@ -32,6 +32,7 @@
 - 🖼️ **多媒体支持**: 支持图片、视频、音频和文字内容的分享
 - 🎥 **视频预览**: 点击即可播放，支持 iOS/Android 跨平台兼容
 - 🔄 **音视频转换**: 内置 FFmpeg，支持音频转视频、视频转码优化
+- 🎤 **AI 语音合成**: 文本一键生成语音文件并发布到首页
 - 🔄 **实时同步**: 多端实时同步，A端分享 B端可见
 - 📱 **移动端优化**: 完美适配 iPhone/iPad/Android，解决底部导航遮挡问题
 - 🗂️ **内容管理**: 支持内容筛选、排序、删除和恢复
@@ -93,6 +94,22 @@ http://localhost:3000
 - **nginx 容器**：Nginx 反向代理（内部端口 80，映射到主机 8580）
 
 如需修改端口，编辑 `docker-compose.yml` 文件中的 `ports` 配置。
+
+## 🎤 AI 语音合成配置（豆包语音）
+
+首页的「AI 语音合成」会调用火山引擎的单向流式 HTTP V3 接口（`https://openspeech.bytedance.com/api/v3/tts/unidirectional`），由后端代为鉴权并将音频写入 `uploads/`，随后以音频内容形式发布到首页。
+
+需要配置以下环境变量（建议仅在服务端配置，避免泄露）：
+
+- `VOLC_TTS_APP_ID`：火山引擎控制台的 APP ID
+- `VOLC_TTS_ACCESS_KEY`：火山引擎控制台的 Access Token
+- `VOLC_TTS_RESOURCE_ID_V2`：2.0 资源 ID（默认 `seed-tts-2.0`）
+- `VOLC_TTS_RESOURCE_ID_V1`：1.0 资源 ID（默认 `seed-tts-1.0`，用于 `*_mars_bigtts` 等 1.0 音色）
+- `VOLC_TTS_RESOURCE_ID_ICL1`：声音复刻 1.0 资源 ID（默认 `seed-icl-1.0`）
+- `VOLC_TTS_RESOURCE_ID_ICL2`：声音复刻 2.0 资源 ID（默认 `seed-icl-2.0`，常用于 `saturn_` 前缀音色）
+- `VOLC_TTS_MODEL_V2`：可选，用于部分 2.0/saturn 音色的模型参数（不填则用默认）
+
+Docker 部署时可在 `docker-compose.yml` 的 `app.environment` 中填写上述变量。
 
 ### 方法三：手动部署
 
