@@ -72,9 +72,17 @@ jspm_packages/
 .tern-port
 
 # Application specific
-uploads/
-data/
 *.log
+
+# 忽略 data 目录下的所有文件
+/data/*
+# 但不要忽略 .gitkeep 文件
+!/data/.gitkeep
+
+# 忽略 uploads 目录下的所有文件
+/uploads/*
+# 但不要忽略 .gitkeep 文件
+!/uploads/.gitkeep
 
 # OS generated files
 .DS_Store
