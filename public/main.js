@@ -14,6 +14,14 @@ class MediaShareApp {
         this.isOnline = navigator.onLine;
         this.apiBase = '/api';
         this.filesToUpload = []; // 用于存储待上传的文件对象
+        this.voiceClonePollTimer = null;
+        this.voiceClonePollingSpeakerId = '';
+        this.voiceClonePollingModelType = 4;
+        this.voiceCloneAllowedSpeakerIds = [];
+        this.voiceCloneIsRecording = false;
+        this.voiceCloneRecordedBase64 = '';
+        this.voiceCloneRecordedBlobUrl = '';
+        this.voiceCloneRecordingState = null;
         
         this.init();
     }
@@ -26,6 +34,8 @@ class MediaShareApp {
         
         if (this.currentPage === 'index') {
             await this.initIndexPage();
+        } else if (this.currentPage === 'tts') {
+            await this.initTtsPage();
         } else if (this.currentPage === 'history') {
             await this.initHistoryPage();
         } else if (this.currentPage === 'settings') {
@@ -36,6 +46,7 @@ class MediaShareApp {
     // 获取当前页面
     getCurrentPage() {
         const path = window.location.pathname;
+        if (path.includes('tts.html')) return 'tts';
         if (path.includes('history.html')) return 'history';
         if (path.includes('settings.html')) return 'settings';
         return 'index';
@@ -61,6 +72,39 @@ class MediaShareApp {
             default:
                 return '';
         }
+    }
+
+    handleImageLoadError(img) {
+        if (!img || img.dataset.fallbackApplied === '1') return;
+        img.dataset.fallbackApplied = '1';
+
+        const src = img.getAttribute('src') || '';
+        const container = img.parentElement;
+        if (!container) return;
+
+        img.classList.add('hidden');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'absolute inset-0 flex flex-col items-center justify-center bg-gray-100 text-gray-500 text-xs p-4';
+
+        const title = document.createElement('div');
+        title.className = 'font-medium text-gray-600';
+        title.textContent = '图片无法预览（可能是 HEIC 格式）';
+
+        const tip = document.createElement('div');
+        tip.className = 'text-gray-500';
+        tip.textContent = '可点击下载或重新上传为 JPG/PNG';
+
+        const link = document.createElement('a');
+        link.href = src;
+        link.className = 'mt-2 px-3 py-2 bg-white rounded-lg shadow-sm border border-gray-200 text-blue-600';
+        link.textContent = '下载原文件';
+        link.setAttribute('download', '');
+
+        overlay.appendChild(title);
+        overlay.appendChild(tip);
+        overlay.appendChild(link);
+        container.appendChild(overlay);
     }
     
     // 设置网络状态监听器
@@ -98,6 +142,8 @@ class MediaShareApp {
         
         if (this.currentPage === 'index') {
             this.setupIndexEventListeners();
+        } else if (this.currentPage === 'tts') {
+            this.setupTtsEventListeners();
         } else if (this.currentPage === 'history') {
             this.setupHistoryEventListeners();
         } else if (this.currentPage === 'settings') {
@@ -112,15 +158,44 @@ class MediaShareApp {
             refreshBtn.addEventListener('click', () => this.refreshContent());
         }
         
+        const mediaInput = document.getElementById('mediaInput');
         const fileInput = document.getElementById('fileInput');
         const uploadArea = document.getElementById('uploadArea');
+        const chooseMediaBtn = document.getElementById('chooseMediaBtn');
+        const chooseFileBtn = document.getElementById('chooseFileBtn');
         
-        if (fileInput && uploadArea) {
-            uploadArea.addEventListener('click', () => fileInput.click());
+        if (uploadArea) {
+            uploadArea.addEventListener('click', () => {
+                if (mediaInput) return mediaInput.click();
+                if (fileInput) return fileInput.click();
+            });
             uploadArea.addEventListener('dragover', (e) => this.handleDragOver(e));
             uploadArea.addEventListener('drop', (e) => this.handleDrop(e));
+        }
+
+        if (mediaInput) {
+            mediaInput.addEventListener('change', (e) => this.handleFileSelect(e));
+        }
+        if (fileInput) {
             fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         }
+
+        const bindPress = (el, handler) => {
+            if (!el) return;
+            el.addEventListener('click', handler);
+            el.addEventListener('pointerup', handler);
+            el.addEventListener('touchend', handler, { passive: false });
+        };
+
+        bindPress(chooseMediaBtn, (e) => {
+            if (e) e.preventDefault();
+            if (mediaInput) mediaInput.click();
+        });
+
+        bindPress(chooseFileBtn, (e) => {
+            if (e) e.preventDefault();
+            if (fileInput) fileInput.click();
+        });
         
         const publishBtn = document.getElementById('publishBtn');
         if (publishBtn) {
@@ -145,9 +220,16 @@ class MediaShareApp {
         // TTS 监听器
         const openTTSBtn = document.getElementById('openTTSBtn');
         if (openTTSBtn) {
-            openTTSBtn.addEventListener('click', () => this.openTTSModal());
+            openTTSBtn.addEventListener('click', () => {
+                const textInput = document.getElementById('textInput');
+                const text = textInput && typeof textInput.value === 'string' ? textInput.value.trim() : '';
+                const url = text ? `/tts.html?text=${encodeURIComponent(text)}` : '/tts.html';
+                window.location.href = url;
+            });
         }
+    }
 
+    setupTtsEventListeners() {
         const generateTTSBtn = document.getElementById('generateTTSBtn');
         if (generateTTSBtn) {
             generateTTSBtn.addEventListener('click', () => this.generateTTS());
@@ -156,7 +238,8 @@ class MediaShareApp {
         const ttsSpeedRange = document.getElementById('ttsSpeedRange');
         if (ttsSpeedRange) {
             ttsSpeedRange.addEventListener('input', (e) => {
-                document.getElementById('speedValue').textContent = e.target.value;
+                const speedValue = document.getElementById('speedValue');
+                if (speedValue) speedValue.textContent = e.target.value;
             });
         }
 
@@ -169,6 +252,49 @@ class MediaShareApp {
         if (addTTSVoiceBtn) {
             addTTSVoiceBtn.addEventListener('click', () => this.addTtsVoice());
         }
+
+        const vcGenerateIdBtn = document.getElementById('vcGenerateIdBtn');
+        if (vcGenerateIdBtn) {
+            vcGenerateIdBtn.addEventListener('click', async () => {
+                await this.fillVoiceCloneSpeakerId({ force: true });
+            });
+        }
+
+        const vcSpeakerSelect = document.getElementById('vcSpeakerSelect');
+        if (vcSpeakerSelect) {
+            vcSpeakerSelect.addEventListener('change', (e) => {
+                const input = document.getElementById('vcSpeakerId');
+                if (!input) return;
+                const value = e && e.target ? String(e.target.value || '').trim() : '';
+                if (value) input.value = value;
+            });
+        }
+
+        const vcRecordBtn = document.getElementById('vcRecordBtn');
+        if (vcRecordBtn) {
+            vcRecordBtn.addEventListener('click', () => this.toggleVoiceCloneRecording());
+        }
+
+        const vcUploadBtn = document.getElementById('vcUploadBtn');
+        if (vcUploadBtn) {
+            vcUploadBtn.addEventListener('click', () => this.uploadVoiceClone());
+        }
+
+        const vcStatusBtn = document.getElementById('vcStatusBtn');
+        if (vcStatusBtn) {
+            vcStatusBtn.addEventListener('click', () => this.fetchVoiceCloneStatus({ startPolling: false }));
+        }
+    }
+
+    async initTtsPage() {
+        const params = new URLSearchParams(window.location.search || '');
+        const text = params.get('text');
+        const ttsTextInput = document.getElementById('ttsTextInput');
+        if (ttsTextInput && typeof text === 'string' && text.trim()) {
+            ttsTextInput.value = text.trim();
+        }
+        await this.refreshTtsVoices({ silent: true });
+        await this.fillVoiceCloneSpeakerId({ force: false });
     }
     
     // 历史页面事件监听器
@@ -438,6 +564,7 @@ class MediaShareApp {
             // 使用内部维护的文件列表
             if (this.filesToUpload.length > 0) {
                 for (const file of this.filesToUpload) {
+                    if (!file) continue;
                     formData.append('files', file);
                 }
             }
@@ -457,6 +584,8 @@ class MediaShareApp {
             // 清空输入
             if (textInput) textInput.value = '';
             this.filesToUpload = [];
+            const mediaInput = document.getElementById('mediaInput');
+            if (mediaInput) mediaInput.value = '';
             const fileInput = document.getElementById('fileInput');
             if (fileInput) fileInput.value = '';
             
@@ -647,6 +776,7 @@ class MediaShareApp {
         if (emptyState) emptyState.classList.add('hidden');
         
         contentGrid.innerHTML = filteredContents.map(content => this.createContentCard(content)).join('');
+        this.prepareVideoThumbnails(contentGrid);
         
         // 添加点击事件
         const cards = contentGrid.querySelectorAll('.content-card');
@@ -670,6 +800,26 @@ class MediaShareApp {
         });
     }
     
+    prepareVideoThumbnails(rootEl) {
+        if (!rootEl) return;
+        const videos = rootEl.querySelectorAll('video[data-video-thumb="1"]');
+        videos.forEach((video) => {
+            if (video.dataset.thumbReady === '1') return;
+            video.dataset.thumbReady = '1';
+            const seekTo = () => {
+                try {
+                    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+                    const t = Math.min(0.2, Math.max(0.05, video.duration * 0.02));
+                    if (Math.abs(video.currentTime - t) < 0.01) return;
+                    video.currentTime = t;
+                } catch {}
+            };
+            video.addEventListener('loadedmetadata', seekTo, { once: true });
+            video.addEventListener('loadeddata', seekTo, { once: true });
+            if (video.readyState >= 1) seekTo();
+        });
+    }
+
     renderDeletedContents() {
         const contentGrid = document.getElementById('contentGrid');
         const emptyState = document.getElementById('emptyState');
@@ -688,6 +838,7 @@ class MediaShareApp {
         if (emptyState) emptyState.classList.add('hidden');
         
         contentGrid.innerHTML = filteredContents.map(content => this.createDeletedContentCard(content)).join('');
+        this.prepareVideoThumbnails(contentGrid);
         
         // 添加复选框事件
         const checkboxes = contentGrid.querySelectorAll('input[type="checkbox"]');
@@ -784,13 +935,21 @@ class MediaShareApp {
         const escapedText = content.text ? content.text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') : '';
         
         if (content.type === 'image') {
+            const hasOriginal = !!content.originalData;
             return `
                 <div class="${isModal ? 'max-h-[70vh] flex justify-center' : 'aspect-square'} bg-gray-100 rounded-lg overflow-hidden mb-3 relative group">
-                    <img src="${content.data}" alt="图片" class="${isModal ? 'max-w-full max-h-full object-contain' : 'w-full h-full object-cover'}">
+                    <img src="${content.data}" alt="图片" onerror="window.app.handleImageLoadError(this)" class="${isModal ? 'max-w-full max-h-full object-contain' : 'w-full h-full object-cover'}">
                     <div class="absolute top-2 right-2 flex items-center justify-center">
-                        <a href="${content.data}" download="${content.filename || 'download'}" class="p-3 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" style="background: rgba(255,255,255,0.95);" title="下载图片" onclick="event.stopPropagation()">
-                            ${this.svgIcon('download', 'w-6 h-6 text-blue-600')}
-                        </a>
+                        <div class="flex items-center gap-2">
+                            <a href="${content.data}" download="${content.filename || 'download'}" class="p-3 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" style="background: rgba(255,255,255,0.95);" title="下载 JPG" onclick="event.stopPropagation()">
+                                ${this.svgIcon('download', 'w-6 h-6 text-blue-600')}
+                            </a>
+                            ${hasOriginal ? `
+                                <a href="${content.originalData}" download="${content.originalFilename || content.filename || 'original'}" class="px-3 py-2 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100 text-xs font-bold text-gray-700" style="background: rgba(255,255,255,0.95);" title="下载原图" onclick="event.stopPropagation()">
+                                    原图
+                                </a>
+                            ` : ''}
+                        </div>
                     </div>
                 </div>
                 ${content.text ? `
@@ -845,7 +1004,15 @@ class MediaShareApp {
             } else {
                 return `
                     <div class="aspect-video bg-gray-100 rounded-lg overflow-hidden mb-3 relative group">
-                        <div class="w-full h-full bg-gradient-to-br from-gray-900 via-gray-700 to-gray-900"></div>
+                        <video
+                            class="w-full h-full object-cover pointer-events-none"
+                            src="${content.data}#t=0.1"
+                            muted
+                            playsinline
+                            webkit-playsinline
+                            preload="metadata"
+                            data-video-thumb="1"
+                        ></video>
                         <div class="absolute inset-0 flex items-center justify-center bg-black transition-all" style="background: rgba(0,0,0,0.25);">
                             <div class="w-12 h-12 bg-white rounded-full flex items-center justify-center backdrop-blur-sm group-hover:scale-110 transition-transform" style="background: rgba(255,255,255,0.28);">
                                 <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -1399,6 +1566,7 @@ class MediaShareApp {
                 ttsTextInput.value = textInput.value.trim();
             }
             this.refreshTtsVoices({ silent: true });
+            this.fillVoiceCloneSpeakerId({ force: false });
             modal.classList.remove('hidden');
             ttsTextInput.focus();
         }
@@ -1409,22 +1577,50 @@ class MediaShareApp {
         if (modal) {
             modal.classList.add('hidden');
         }
+        this.stopVoiceClonePolling();
     }
 
     async refreshTtsVoices({ silent } = {}) {
         const status = document.getElementById('ttsVoicesStatus');
         try {
             if (status) status.textContent = '加载中...';
-            const resp = await this.apiRequest('/tts/voices');
+            const [resp, statusResp] = await Promise.all([
+                this.apiRequest('/tts/voices'),
+                this.apiRequest('/tts/status', { method: 'GET' })
+            ]);
             const builtin = (resp.data && Array.isArray(resp.data.builtin)) ? resp.data.builtin : [];
             const custom = (resp.data && Array.isArray(resp.data.custom)) ? resp.data.custom : [];
+            const allowed = (statusResp && statusResp.data && Array.isArray(statusResp.data.voiceCloneAllowedSpeakerIds))
+                ? statusResp.data.voiceCloneAllowedSpeakerIds.map((x) => String(x || '').trim()).filter(Boolean)
+                : [];
+            this.voiceCloneAllowedSpeakerIds = allowed;
+
+            const customMap = new Map(custom.map((v) => [v.id, v]));
+            const voiceCloneSpeakers = allowed.map((id) => {
+                const record = customMap.get(id);
+                return { id, name: record && record.name ? record.name : '', group: record && record.group ? record.group : '' };
+            });
+
             this.renderTtsVoiceSelect(builtin, custom);
-            this.renderCustomTtsVoices(custom);
+            this.renderCustomTtsVoices(voiceCloneSpeakers);
+            this.renderVoiceCloneSpeakerSelect(voiceCloneSpeakers);
+            this.setVoiceCloneSpeakerIdLockedMode(allowed.length > 0);
             if (status) status.textContent = `已加载 ${builtin.length + custom.length} 个`;
         } catch (e) {
             if (status) status.textContent = '';
             if (!silent) this.showNotification('获取音色列表失败: ' + e.message, 'error');
         }
+    }
+
+    setVoiceCloneSpeakerIdLockedMode(locked) {
+        const idInput = document.getElementById('ttsNewVoiceId');
+        const nameInput = document.getElementById('ttsNewVoiceName');
+        const addBtn = document.getElementById('addTTSVoiceBtn');
+        const display = locked ? 'none' : '';
+
+        if (idInput) idInput.style.display = display;
+        if (nameInput) nameInput.style.display = display;
+        if (addBtn) addBtn.style.display = display;
     }
 
     renderTtsVoiceSelect(builtin, custom) {
@@ -1457,25 +1653,50 @@ class MediaShareApp {
         const container = document.getElementById('ttsCustomVoicesList');
         if (!container) return;
         if (!custom || custom.length === 0) {
-            container.innerHTML = `<div class="text-xs text-gray-500">暂无自定义音色</div>`;
+            container.innerHTML = `<div class="text-xs text-gray-500">暂无可用 speaker_id</div>`;
             return;
         }
 
         container.innerHTML = custom.map((v) => {
             const label = v.name ? `${v.name}` : v.id;
+            const inputId = `ttsVoiceName_${v.id}`;
             return `
-                <div class="flex items-center justify-between bg-white rounded-lg border border-gray-200 px-3 py-2">
-                    <div class="min-w-0">
-                        <div class="text-sm font-semibold text-gray-800 truncate">${this.escapeHtml(label)}</div>
-                        <div class="text-xs text-gray-500 truncate">${this.escapeHtml(v.id)}</div>
+                <div class="bg-white rounded-lg border border-gray-200 px-3 py-2 space-y-2">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-semibold text-gray-800 truncate">${this.escapeHtml(label)}</div>
+                            <div class="text-xs text-gray-500 truncate">${this.escapeHtml(v.id)}</div>
+                        </div>
                     </div>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <button class="text-xs font-medium text-purple-700 hover:text-purple-900 underline" onclick="window.app.useTtsVoice('${this.escapeJs(v.id)}', event)">使用</button>
-                        <button class="text-xs font-medium text-red-600 hover:text-red-700 underline" onclick="window.app.deleteTtsVoice('${this.escapeJs(v.id)}', event)">删除</button>
+                    <div class="flex items-center gap-2">
+                        <input id="${this.escapeHtml(inputId)}" class="flex-1 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" value="${this.escapeHtml(v.name || '')}" placeholder="给这个 speaker_id 起个名字（如：美玲）" />
+                        <button type="button" class="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all" onclick="window.app.saveTtsVoiceName('${this.escapeJs(v.id)}', event)">保存</button>
                     </div>
                 </div>
             `;
         }).join('');
+    }
+
+    renderVoiceCloneSpeakerSelect(custom) {
+        const select = document.getElementById('vcSpeakerSelect');
+        const input = document.getElementById('vcSpeakerId');
+        if (!select || !input) return;
+
+        const list = Array.isArray(custom) ? custom : [];
+        if (list.length === 0) {
+            select.innerHTML = `<option value="">（请在 .env 配置允许的 speaker_id 列表）</option>`;
+            return;
+        }
+
+        const current = String(input.value || '').trim();
+        select.innerHTML = [
+            `<option value="">手动输入</option>`,
+            ...list.map((v) => {
+                const label = v.name ? `${v.name}（${v.id}）` : v.id;
+                const selected = current && current === v.id ? ' selected' : '';
+                return `<option value="${this.escapeHtml(v.id)}"${selected}>${this.escapeHtml(label)}</option>`;
+            })
+        ].join('');
     }
 
     useTtsVoice(id, event) {
@@ -1483,6 +1704,22 @@ class MediaShareApp {
         const voiceCustom = document.getElementById('ttsVoiceCustom');
         if (voiceCustom) voiceCustom.value = id;
         this.showNotification('已选择音色: ' + id, 'success');
+    }
+
+    async saveTtsVoiceName(id, event) {
+        if (event) event.stopPropagation();
+        const input = document.getElementById(`ttsVoiceName_${id}`);
+        const name = input ? String(input.value || '').trim() : '';
+        try {
+            await this.apiRequest('/tts/voices', {
+                method: 'POST',
+                body: JSON.stringify({ id, name, group: '我的音色' })
+            });
+            await this.refreshTtsVoices({ silent: true });
+            this.showNotification('已保存名称', 'success');
+        } catch (e) {
+            this.showNotification('保存失败: ' + e.message, 'error');
+        }
     }
 
     async addTtsVoice() {
@@ -1518,6 +1755,441 @@ class MediaShareApp {
             this.showNotification('已删除音色', 'success');
         } catch (e) {
             this.showNotification('删除失败: ' + e.message, 'error');
+        }
+    }
+
+    async fillVoiceCloneSpeakerId({ force } = {}) {
+        const input = document.getElementById('vcSpeakerId');
+        if (!input) return;
+        const current = String(input.value || '').trim();
+        if (current && !force) return;
+        try {
+            const resp = await this.apiRequest('/tts/status', { method: 'GET' });
+            const suggested = resp && resp.data && typeof resp.data.voiceCloneSpeakerId === 'string' ? resp.data.voiceCloneSpeakerId.trim() : '';
+            if (suggested) {
+                input.value = suggested;
+                return;
+            }
+            const allowed = resp && resp.data && Array.isArray(resp.data.voiceCloneAllowedSpeakerIds)
+                ? resp.data.voiceCloneAllowedSpeakerIds.map((x) => String(x || '').trim()).filter(Boolean)
+                : [];
+            if (allowed.length > 0) {
+                input.value = allowed[0];
+                return;
+            }
+        } catch {}
+        if (force) {
+            this.showNotification('请从控制台获取 speaker_id（如 S_7JA7WNiQ1）', 'warning');
+            input.focus();
+        }
+    }
+
+    setVoiceCloneStatus(text) {
+        const el = document.getElementById('vcStatusText');
+        if (!el) return;
+        el.textContent = text ? String(text) : '';
+    }
+
+    voiceCloneStatusLabel(status) {
+        const s = Number(status);
+        if (s === 0) return '未发现';
+        if (s === 1) return '训练中';
+        if (s === 2) return '训练完成';
+        if (s === 3) return '训练失败';
+        if (s === 4) return '可用';
+        return `未知(${String(status)})`;
+    }
+
+    stopVoiceClonePolling() {
+        if (this.voiceClonePollTimer) {
+            clearInterval(this.voiceClonePollTimer);
+            this.voiceClonePollTimer = null;
+        }
+        this.voiceClonePollingSpeakerId = '';
+    }
+
+    startVoiceClonePolling({ speakerId, modelType }) {
+        this.stopVoiceClonePolling();
+        this.voiceClonePollingSpeakerId = speakerId;
+        this.voiceClonePollingModelType = modelType;
+
+        let ticks = 0;
+        this.voiceClonePollTimer = setInterval(async () => {
+            ticks += 1;
+            if (ticks > 60) {
+                this.stopVoiceClonePolling();
+                return;
+            }
+            await this.fetchVoiceCloneStatus({ startPolling: true, silent: true });
+        }, 2000);
+    }
+
+    async fileToBase64(file) {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+    }
+
+    arrayBufferToBase64(buf) {
+        const bytes = new Uint8Array(buf);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+    }
+
+    mergeFloat32(chunks) {
+        const list = Array.isArray(chunks) ? chunks : [];
+        let total = 0;
+        for (const c of list) total += c.length;
+        const out = new Float32Array(total);
+        let offset = 0;
+        for (const c of list) {
+            out.set(c, offset);
+            offset += c.length;
+        }
+        return out;
+    }
+
+    downsampleBuffer(buffer, inputRate, outputRate) {
+        if (outputRate === inputRate) return buffer;
+        const ratio = inputRate / outputRate;
+        const newLength = Math.round(buffer.length / ratio);
+        const result = new Float32Array(newLength);
+        let offsetResult = 0;
+        let offsetBuffer = 0;
+        while (offsetResult < result.length) {
+            const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+            let sum = 0;
+            let count = 0;
+            for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                sum += buffer[i];
+                count += 1;
+            }
+            result[offsetResult] = count ? (sum / count) : 0;
+            offsetResult += 1;
+            offsetBuffer = nextOffsetBuffer;
+        }
+        return result;
+    }
+
+    encodeWav16(samples, sampleRate) {
+        const numChannels = 1;
+        const bytesPerSample = 2;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = samples.length * bytesPerSample;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+
+        const writeString = (offset, str) => {
+            for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+        };
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, 16, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            offset += 2;
+        }
+        return buffer;
+    }
+
+    async toggleVoiceCloneRecording() {
+        if (this.voiceCloneIsRecording) {
+            await this.stopVoiceCloneRecording();
+        } else {
+            await this.startVoiceCloneRecording();
+        }
+    }
+
+    async startVoiceCloneRecording() {
+        if (this.voiceCloneIsRecording) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.showNotification('当前浏览器不支持麦克风录音', 'error');
+            return;
+        }
+
+        const statusEl = document.getElementById('vcStatusText');
+        const btn = document.getElementById('vcRecordBtn');
+        const timeEl = document.getElementById('vcRecordTime');
+        const preview = document.getElementById('vcRecordedPreview');
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const audioCtx = new AudioCtx();
+            const source = audioCtx.createMediaStreamSource(stream);
+            const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0;
+            const chunks = [];
+
+            processor.onaudioprocess = (e) => {
+                const input = e.inputBuffer.getChannelData(0);
+                chunks.push(new Float32Array(input));
+            };
+
+            source.connect(processor);
+            processor.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            this.voiceCloneRecordingState = {
+                stream,
+                audioCtx,
+                source,
+                processor,
+                gain,
+                chunks,
+                startedAt: Date.now(),
+                timer: null
+            };
+            this.voiceCloneIsRecording = true;
+            this.voiceCloneRecordedBase64 = '';
+            if (this.voiceCloneRecordedBlobUrl) {
+                URL.revokeObjectURL(this.voiceCloneRecordedBlobUrl);
+                this.voiceCloneRecordedBlobUrl = '';
+            }
+            if (preview) preview.src = '';
+
+            if (btn) {
+                btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
+                btn.classList.add('bg-red-600', 'text-white', 'border-red-600');
+                btn.setAttribute('aria-pressed', 'true');
+            }
+            if (statusEl) statusEl.textContent = '录音中...';
+            if (timeEl) timeEl.textContent = '00:00';
+
+            this.voiceCloneRecordingState.timer = setInterval(() => {
+                const elapsedMs = Date.now() - this.voiceCloneRecordingState.startedAt;
+                const totalSec = Math.floor(elapsedMs / 1000);
+                const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+                const ss = String(totalSec % 60).padStart(2, '0');
+                if (timeEl) timeEl.textContent = `${mm}:${ss}`;
+            }, 200);
+        } catch (e) {
+            this.showNotification('麦克风权限获取失败: ' + (e && e.message ? e.message : 'unknown'), 'error');
+        }
+    }
+
+    async stopVoiceCloneRecording() {
+        if (!this.voiceCloneIsRecording) return;
+        const st = this.voiceCloneRecordingState;
+        this.voiceCloneIsRecording = false;
+        this.voiceCloneRecordingState = null;
+
+        const statusEl = document.getElementById('vcStatusText');
+        const btn = document.getElementById('vcRecordBtn');
+        const timeEl = document.getElementById('vcRecordTime');
+        const preview = document.getElementById('vcRecordedPreview');
+
+        try {
+            if (st && st.timer) clearInterval(st.timer);
+            if (st && st.processor) st.processor.disconnect();
+            if (st && st.source) st.source.disconnect();
+            if (st && st.gain) st.gain.disconnect();
+            if (st && st.stream) st.stream.getTracks().forEach((t) => t.stop());
+            if (st && st.audioCtx) await st.audioCtx.close();
+
+            const inputRate = st && st.audioCtx ? st.audioCtx.sampleRate : 48000;
+            const merged = this.mergeFloat32(st && st.chunks ? st.chunks : []);
+            const targetRate = 24000;
+            const downsampled = this.downsampleBuffer(merged, inputRate, targetRate);
+            const wavBuf = this.encodeWav16(downsampled, targetRate);
+            const b64 = this.arrayBufferToBase64(wavBuf);
+            this.voiceCloneRecordedBase64 = b64;
+
+            const blob = new Blob([wavBuf], { type: 'audio/wav' });
+            this.voiceCloneRecordedBlobUrl = URL.createObjectURL(blob);
+            if (preview) preview.src = this.voiceCloneRecordedBlobUrl;
+
+            if (statusEl) statusEl.textContent = '已完成录音，可直接上传复刻';
+        } catch (e) {
+            if (statusEl) statusEl.textContent = '';
+            this.showNotification('结束录音失败: ' + (e && e.message ? e.message : 'unknown'), 'error');
+        } finally {
+            if (btn) {
+                btn.classList.remove('bg-red-600', 'text-white', 'border-red-600');
+                btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
+                btn.setAttribute('aria-pressed', 'false');
+            }
+            if (timeEl && !timeEl.textContent) timeEl.textContent = '00:00';
+        }
+    }
+
+    async uploadVoiceClone() {
+        if (!this.isOnline) {
+            this.showNotification('离线模式下无法使用 AI 功能', 'warning');
+            return;
+        }
+
+        const speakerIdInput = document.getElementById('vcSpeakerId');
+        const modelTypeSelect = document.getElementById('vcModelType');
+        const languageSelect = document.getElementById('vcLanguage');
+        const readTextInput = document.getElementById('vcReadText');
+        const demoTextInput = document.getElementById('vcDemoText');
+        const fileInput = document.getElementById('vcAudioFile');
+        const uploadBtn = document.getElementById('vcUploadBtn');
+
+        const speakerId = speakerIdInput ? speakerIdInput.value.trim() : '';
+        const modelType = modelTypeSelect ? Number(modelTypeSelect.value) : 4;
+        const language = languageSelect ? Number(languageSelect.value) : 0;
+        const readText = readTextInput ? readTextInput.value.trim() : '';
+        const demoText = demoTextInput ? demoTextInput.value.trim() : '';
+        const file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+
+        if (!speakerId) {
+            this.showNotification('请填写 speaker_id', 'warning');
+            if (speakerIdInput) speakerIdInput.focus();
+            return;
+        }
+        if (!/^S_[A-Za-z0-9]+$/.test(speakerId)) {
+            this.showNotification('speaker_id 格式应为 S_ 开头（从控制台获取）', 'warning');
+            if (speakerIdInput) speakerIdInput.focus();
+            return;
+        }
+        if (Array.isArray(this.voiceCloneAllowedSpeakerIds) && this.voiceCloneAllowedSpeakerIds.length > 0 && !this.voiceCloneAllowedSpeakerIds.includes(speakerId)) {
+            this.showNotification('speaker_id 不在允许列表中（请使用控制台提供的固定 speaker_id）', 'warning');
+            if (speakerIdInput) speakerIdInput.focus();
+            return;
+        }
+        if (!file && !this.voiceCloneRecordedBase64) {
+            this.showNotification('请选择音频文件或使用麦克风录音', 'warning');
+            return;
+        }
+
+        try {
+            if (uploadBtn) {
+                uploadBtn.disabled = true;
+                uploadBtn.classList.add('opacity-75', 'cursor-not-allowed');
+            }
+            this.setVoiceCloneStatus('读取音频中...');
+            let audioBytes = '';
+            let audioFormat = '';
+            if (file) {
+                const ext = (file.name || '').split('.').pop().toLowerCase();
+                audioFormat = ext || (file.type && file.type.includes('/') ? file.type.split('/')[1] : '');
+                if (!audioFormat) {
+                    this.showNotification('无法识别音频格式，请使用 wav/mp3/ogg/m4a/aac/pcm', 'warning');
+                    return;
+                }
+                audioBytes = await this.fileToBase64(file);
+            } else {
+                audioBytes = this.voiceCloneRecordedBase64;
+                audioFormat = 'wav';
+            }
+            this.setVoiceCloneStatus('上传中...');
+
+            await this.apiRequest('/voice-clone/upload', {
+                method: 'POST',
+                body: JSON.stringify({
+                    speaker_id: speakerId,
+                    audio_bytes: audioBytes,
+                    audio_format: audioFormat,
+                    model_type: modelType,
+                    language,
+                    text: readText,
+                    demo_text: demoText
+                })
+            });
+
+            this.showNotification('已提交复刻任务，正在查询状态...', 'success');
+            this.startVoiceClonePolling({ speakerId, modelType });
+            await this.fetchVoiceCloneStatus({ startPolling: true, silent: true });
+        } catch (e) {
+            this.setVoiceCloneStatus('');
+            this.showNotification('复刻上传失败: ' + e.message, 'error');
+        } finally {
+            if (uploadBtn) {
+                uploadBtn.disabled = false;
+                uploadBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+            }
+        }
+    }
+
+    async fetchVoiceCloneStatus({ startPolling, silent } = {}) {
+        const speakerIdInput = document.getElementById('vcSpeakerId');
+        const modelTypeSelect = document.getElementById('vcModelType');
+        const speakerId = speakerIdInput ? speakerIdInput.value.trim() : '';
+        const modelType = modelTypeSelect ? Number(modelTypeSelect.value) : 4;
+
+        const effectiveSpeakerId = speakerId || this.voiceClonePollingSpeakerId;
+        const effectiveModelType = Number.isFinite(modelType) ? modelType : this.voiceClonePollingModelType;
+
+        if (!effectiveSpeakerId) {
+            if (!silent) this.showNotification('请先填写 speaker_id', 'warning');
+            return;
+        }
+        if (!/^S_[A-Za-z0-9]+$/.test(effectiveSpeakerId)) {
+            if (!silent) this.showNotification('speaker_id 格式应为 S_ 开头（从控制台获取）', 'warning');
+            return;
+        }
+        if (Array.isArray(this.voiceCloneAllowedSpeakerIds) && this.voiceCloneAllowedSpeakerIds.length > 0 && !this.voiceCloneAllowedSpeakerIds.includes(effectiveSpeakerId)) {
+            if (!silent) this.showNotification('speaker_id 不在允许列表中（请使用控制台提供的固定 speaker_id）', 'warning');
+            return;
+        }
+
+        try {
+            const resp = await this.apiRequest('/voice-clone/status', {
+                method: 'POST',
+                body: JSON.stringify({ speaker_id: effectiveSpeakerId, model_type: effectiveModelType })
+            });
+
+            const data = resp && resp.data ? resp.data : {};
+            const status = data && typeof data.status !== 'undefined' ? data.status : undefined;
+            if (typeof status === 'undefined') {
+                this.setVoiceCloneStatus('状态查询成功，但返回缺少 status 字段');
+                return;
+            }
+
+            this.setVoiceCloneStatus(`状态：${this.voiceCloneStatusLabel(status)}`);
+
+            const done = Number(status) === 2 || Number(status) === 4;
+            const failed = Number(status) === 3;
+            if (failed) {
+                this.stopVoiceClonePolling();
+                this.showNotification('复刻训练失败，请更换音频重试', 'error');
+                return;
+            }
+
+            if (done) {
+                this.stopVoiceClonePolling();
+                const name = `复刻音色 ${effectiveSpeakerId}`;
+                await this.apiRequest('/tts/voices', {
+                    method: 'POST',
+                    body: JSON.stringify({ id: effectiveSpeakerId, name, group: '我的音色' })
+                });
+                await this.refreshTtsVoices({ silent: true });
+
+                const voiceCustom = document.getElementById('ttsVoiceCustom');
+                if (voiceCustom) voiceCustom.value = effectiveSpeakerId;
+                this.showNotification('复刻完成，已添加到“我的音色”并选中', 'success');
+            } else if (!startPolling) {
+                this.startVoiceClonePolling({ speakerId: effectiveSpeakerId, modelType: effectiveModelType });
+            }
+        } catch (e) {
+            if (!silent) this.showNotification('查询复刻状态失败: ' + e.message, 'error');
         }
     }
 
@@ -1571,11 +2243,11 @@ class MediaShareApp {
             });
 
             this.showNotification('语音生成成功！', 'success');
-            this.closeTTSModal();
-            
-            // 刷新列表
-            await this.loadContents();
-            this.renderContents();
+            if (this.currentPage === 'index') {
+                this.closeTTSModal();
+                await this.loadContents();
+                this.renderContents();
+            }
             
             // 清空输入
             textInput.value = '';
@@ -1689,6 +2361,7 @@ class MediaShareApp {
     
     toggleDarkMode(enabled) {
         this.updateSetting('darkMode', enabled);
+        document.documentElement.classList.toggle('dark', enabled);
         document.body.classList.toggle('dark', enabled);
     }
     
@@ -1720,9 +2393,8 @@ class MediaShareApp {
     }
     
     applySettings() {
-        if (this.settings.darkMode) {
-            document.body.classList.add('dark');
-        }
+        document.documentElement.classList.toggle('dark', Boolean(this.settings.darkMode));
+        document.body.classList.toggle('dark', Boolean(this.settings.darkMode));
         
         this.updateOnlineStatus();
     }

@@ -102,14 +102,26 @@ http://localhost:3000
 需要配置以下环境变量（建议仅在服务端配置，避免泄露）：
 
 - `VOLC_TTS_APP_ID`：火山引擎控制台的 APP ID
-- `VOLC_TTS_ACCESS_KEY`：火山引擎控制台的 Access Token
+- `VOLC_TTS_ACCESS_TOKEN`：火山引擎控制台的 Access Token
+- `VOLC_TTS_ACCESS_KEY`：兼容旧配置（等同于 `VOLC_TTS_ACCESS_TOKEN`）
 - `VOLC_TTS_RESOURCE_ID_V2`：2.0 资源 ID（默认 `seed-tts-2.0`）
 - `VOLC_TTS_RESOURCE_ID_V1`：1.0 资源 ID（默认 `seed-tts-1.0`，用于 `*_mars_bigtts` 等 1.0 音色）
 - `VOLC_TTS_RESOURCE_ID_ICL1`：声音复刻 1.0 资源 ID（默认 `seed-icl-1.0`）
 - `VOLC_TTS_RESOURCE_ID_ICL2`：声音复刻 2.0 资源 ID（默认 `seed-icl-2.0`，常用于 `saturn_` 前缀音色）
 - `VOLC_TTS_MODEL_V2`：可选，用于部分 2.0/saturn 音色的模型参数（不填则用默认）
+- `VOLC_VOICECLONE_RESOURCE_ID`：声音复刻（mega_tts）资源 ID（默认 `volc.megatts.voiceclone`）
+
+### 使用 .env 配置（推荐）
+
+项目根目录提供 `.env.example`，复制为 `.env` 后填写：
+
+- `VOLC_TTS_APP_ID=...`
+- `VOLC_TTS_ACCESS_TOKEN=...`
+
+运行 `node server.js` / `npm start` 会自动加载根目录 `.env`；Docker Compose 也会自动读取同目录的 `.env` 并注入到容器环境中。
 
 Docker 部署时可在 `docker-compose.yml` 的 `app.environment` 中填写上述变量。
+
 
 ### 方法三：手动部署
 

@@ -1,14 +1,65 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fsSync = require('fs');
 const fs = require('fs').promises;
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+let heicConvert = null;
+try {
+    heicConvert = require('heic-convert');
+} catch {}
+
+function loadDotEnvIfPresent() {
+    try {
+        const envPath = path.join(__dirname, '.env');
+        if (!fsSync.existsSync(envPath)) return;
+        const content = fsSync.readFileSync(envPath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        for (const raw of lines) {
+            const line = String(raw || '').trim();
+            if (!line || line.startsWith('#')) continue;
+            const idx = line.indexOf('=');
+            if (idx <= 0) continue;
+            const key = line.slice(0, idx).trim();
+            if (!key) continue;
+            if (Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+            let value = line.slice(idx + 1).trim();
+            if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            process.env[key] = value;
+        }
+    } catch {}
+}
+
+loadDotEnvIfPresent();
 
 const VOLC_TTS_APP_ID = process.env.VOLC_TTS_APP_ID || '';
 const VOLC_TTS_ACCESS_KEY = process.env.VOLC_TTS_ACCESS_KEY || '';
+function normalizeVolcAccessToken(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    return raw.replace(/^Bearer;?\s*/i, '').trim();
+}
+
+function normalizeVolcVoiceCloneResourceId(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    if (/^volc\.megatts\.voiceclone$/i.test(raw)) return '';
+    if (!/^seed-icl-/i.test(raw)) return '';
+    return raw;
+}
+
+const VOLC_TTS_ACCESS_TOKEN = normalizeVolcAccessToken(process.env.VOLC_TTS_ACCESS_TOKEN || VOLC_TTS_ACCESS_KEY || '');
+const VOLC_VOICECLONE_RESOURCE_ID = normalizeVolcVoiceCloneResourceId(process.env.VOLC_VOICECLONE_RESOURCE_ID);
+const VOLC_VOICECLONE_SPEAKER_ID = (process.env.VOLC_VOICECLONE_SPEAKER_ID || '').trim();
+const VOLC_VOICECLONE_ALLOWED_SPEAKER_IDS = String(process.env.VOLC_VOICECLONE_ALLOWED_SPEAKER_IDS || '')
+    .split(',')
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
 const VOLC_TTS_RESOURCE_ID_V2 = process.env.VOLC_TTS_RESOURCE_ID_V2 || 'seed-tts-2.0';
 const VOLC_TTS_RESOURCE_ID_V1 = process.env.VOLC_TTS_RESOURCE_ID_V1 || 'seed-tts-1.0';
 const VOLC_TTS_RESOURCE_ID_ICL1 = process.env.VOLC_TTS_RESOURCE_ID_ICL1 || 'seed-icl-1.0';
@@ -22,6 +73,79 @@ const PORT = process.env.PORT || 3000;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 增加到 500MB，支持大视频上传
+
+function execFileAsync(file, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        execFile(file, args, { ...options, windowsHide: true, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+            if (error) {
+                error.stdout = stdout;
+                error.stderr = stderr;
+                return reject(error);
+            }
+            resolve({ stdout, stderr });
+        });
+    });
+}
+
+function isHeicLike({ mimetype, filename } = {}) {
+    const mt = typeof mimetype === 'string' ? mimetype.toLowerCase().trim() : '';
+    if (mt === 'image/heic' || mt === 'image/heif') return true;
+    const fn = typeof filename === 'string' ? filename : '';
+    return /\.(heic|heif)$/i.test(fn);
+}
+
+function stripLeadingSlash(p) {
+    const s = typeof p === 'string' ? p : '';
+    return s.replace(/^\/+/, '');
+}
+
+function replaceFileExt(name, extWithDot) {
+    const raw = typeof name === 'string' ? name : '';
+    const ext = typeof extWithDot === 'string' ? extWithDot : '';
+    const parsed = path.parse(raw);
+    if (!parsed.name) return raw;
+    return `${parsed.name}${ext}`;
+}
+
+async function convertHeicToJpeg(inputPath, outputPath) {
+    if (typeof heicConvert === 'function') {
+        try {
+            const inputBuffer = await fs.readFile(inputPath);
+            const outputBuffer = await heicConvert({
+                buffer: inputBuffer,
+                format: 'JPEG',
+                quality: 0.92
+            });
+            await fs.writeFile(outputPath, outputBuffer);
+            const st = await fs.stat(outputPath).catch(() => null);
+            if (st && st.isFile() && st.size > 0) return st;
+        } catch {}
+    }
+
+    const candidates = [
+        { cmd: 'ffmpeg', args: ['-y', '-loglevel', 'error', '-i', inputPath, '-frames:v', '1', '-q:v', '2', outputPath] },
+        { cmd: 'magick', args: [inputPath, outputPath] },
+        { cmd: 'convert', args: [inputPath, outputPath] },
+        { cmd: 'heif-convert', args: [inputPath, outputPath] }
+    ];
+
+    for (const c of candidates) {
+        try {
+            await execFileAsync(c.cmd, c.args);
+            const st = await fs.stat(outputPath).catch(() => null);
+            if (st && st.isFile() && st.size > 0) return st;
+        } catch (err) {
+            const code = err && err.code ? String(err.code) : '';
+            const message = err && err.message ? String(err.message) : '';
+            const notFound = code === 'ENOENT' || /not found/i.test(message);
+            if (notFound) continue;
+            const st = await fs.stat(outputPath).catch(() => null);
+            if (st && st.isFile() && st.size > 0) return st;
+        }
+    }
+
+    return null;
+}
 
 // 确保目录存在
 async function ensureDirectories() {
@@ -57,8 +181,8 @@ const upload = multer({
 
 // 中间件
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -88,6 +212,67 @@ async function writeDataFile(filename, data) {
     } catch (error) {
         console.error('写入文件失败:', error);
         throw error;
+    }
+}
+
+async function migrateHeicImages() {
+    let contents;
+    try {
+        contents = await readDataFile(CONTENTS_FILE, []);
+    } catch (err) {
+        console.error('读取内容数据失败，跳过 HEIC 迁移:', err);
+        return;
+    }
+    if (!Array.isArray(contents) || contents.length === 0) return;
+
+    let changed = false;
+
+    for (const item of contents) {
+        if (!item || item.type !== 'image') continue;
+        const data = typeof item.data === 'string' ? item.data : '';
+        const looksHeic = isHeicLike({ mimetype: item.mimetype, filename: item.filename }) || /\.(heic|heif)$/i.test(data);
+        if (!looksHeic) continue;
+
+        const inputFilename = path.basename(data);
+        if (!inputFilename) continue;
+        const inputPath = path.join(UPLOAD_DIR, inputFilename);
+        const inputExists = await fs.stat(inputPath).then((st) => st && st.isFile()).catch(() => false);
+        if (!inputExists) continue;
+
+        const convertedFilename = inputFilename.replace(/\.(heic|heif)$/i, '.jpg');
+        const outputFilename = convertedFilename === inputFilename ? `${path.parse(inputFilename).name}.jpg` : convertedFilename;
+        const outputPath = path.join(UPLOAD_DIR, outputFilename);
+        const outputExists = await fs.stat(outputPath).then((st) => st && st.isFile() && st.size > 0).catch(() => false);
+
+        let stat = null;
+        if (outputExists) {
+            stat = await fs.stat(outputPath).catch(() => null);
+        } else {
+            stat = await convertHeicToJpeg(inputPath, outputPath);
+        }
+        if (!stat) continue;
+
+        if (!item.originalData && data) item.originalData = data;
+        if (!item.originalFilename && item.filename) item.originalFilename = item.filename;
+        if (!item.originalSize && item.size) item.originalSize = item.size;
+        if (!item.originalMimetype && item.mimetype) item.originalMimetype = item.mimetype;
+
+        item.data = `/uploads/${outputFilename}`;
+        item.mimetype = 'image/jpeg';
+        item.size = stat.size;
+        if (typeof item.filename === 'string' && item.filename) {
+            item.filename = replaceFileExt(item.filename, '.jpg');
+        }
+        item.updatedAt = new Date().toISOString();
+        changed = true;
+    }
+
+    if (changed) {
+        try {
+            await writeDataFile(CONTENTS_FILE, contents);
+        } catch (err) {
+            console.error('写入 HEIC 迁移结果失败:', err);
+        }
     }
 }
 
@@ -137,6 +322,19 @@ async function writeCustomTtsVoices(list) {
     const normalized = Array.isArray(list) ? list.map(normalizeVoiceRecord).filter(Boolean) : [];
     await writeDataFile(TTS_VOICES_FILE, normalized);
     return normalized;
+}
+
+async function getEffectiveVoiceCloneAllowedSpeakerIds() {
+    if (VOLC_VOICECLONE_ALLOWED_SPEAKER_IDS.length > 0) return VOLC_VOICECLONE_ALLOWED_SPEAKER_IDS;
+    try {
+        const custom = await readCustomTtsVoices();
+        const ids = custom
+            .map((v) => (v && typeof v.id === 'string' ? v.id.trim() : ''))
+            .filter((id) => /^S_[A-Za-z0-9]+$/.test(id));
+        return Array.from(new Set(ids));
+    } catch {
+        return [];
+    }
 }
 
 function extractAudioBase64FromChunk(obj) {
@@ -240,7 +438,7 @@ async function volcTtsV3ToBufferOnce({
         'Content-Type': 'application/json',
         'X-Api-App-Id': VOLC_TTS_APP_ID,
         'X-Api-App-Key': VOLC_TTS_APP_ID,
-        'X-Api-Access-Key': VOLC_TTS_ACCESS_KEY,
+        'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
         'X-Api-Resource-Id': resourceId,
         'X-Api-Request-Id': requestId
     };
@@ -430,15 +628,45 @@ app.post('/api/contents', upload.array('files', 10), async (req, res) => {
             } else if (file.mimetype.startsWith('audio/')) {
                 fileType = 'audio';
             }
+
+            let dataPath = `/uploads/${file.filename}`;
+            let filename = file.originalname;
+            let size = file.size;
+            let mimetype = file.mimetype;
+            let originalData;
+            let originalFilename;
+            let originalSize;
+            let originalMimetype;
+
+            if (fileType === 'image' && isHeicLike({ mimetype: file.mimetype, filename: file.originalname })) {
+                const convertedFilename = `${path.parse(file.filename).name}.jpg`;
+                const outputPath = path.join(UPLOAD_DIR, convertedFilename);
+                const stat = await convertHeicToJpeg(file.path, outputPath);
+                if (stat) {
+                    originalData = dataPath;
+                    originalFilename = filename;
+                    originalSize = size;
+                    originalMimetype = mimetype;
+
+                    dataPath = `/uploads/${convertedFilename}`;
+                    filename = replaceFileExt(file.originalname, '.jpg');
+                    size = stat.size;
+                    mimetype = 'image/jpeg';
+                }
+            }
             
             const fileContent = {
                 id: uuidv4(),
                 type: fileType,
                 text: text && files.length > 1 ? text.trim() : '',
-                data: `/uploads/${file.filename}`,
-                filename: file.originalname,
-                size: file.size,
-                mimetype: file.mimetype,
+                data: dataPath,
+                filename,
+                size,
+                mimetype,
+                originalData,
+                originalFilename,
+                originalSize,
+                originalMimetype,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
@@ -744,7 +972,7 @@ app.post('/api/video/optimize', async (req, res) => {
             return res.status(404).json({ success: false, message: '视频内容不存在' });
         }
 
-        const inputPath = path.join(__dirname, item.data);
+        const inputPath = path.join(__dirname, stripLeadingSlash(item.data));
         const outputFilename = `optimized-${uuidv4()}.mp4`;
         const outputPath = path.join(UPLOAD_DIR, outputFilename);
 
@@ -799,7 +1027,7 @@ app.post('/api/audio/to-mp4', async (req, res) => {
             return res.status(404).json({ success: false, message: '音频内容不存在' });
         }
 
-        const inputPath = path.join(__dirname, item.data);
+        const inputPath = path.join(__dirname, stripLeadingSlash(item.data));
         const outputFilename = `${uuidv4()}.mp4`;
         const outputPath = path.join(UPLOAD_DIR, outputFilename);
 
@@ -856,7 +1084,7 @@ app.post('/api/tts', async (req, res) => {
             return res.status(400).json({ success: false, message: '请提供文本内容' });
         }
 
-        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_KEY) {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
             return res.status(500).json({ success: false, message: '未配置火山引擎TTS鉴权信息' });
         }
 
@@ -959,7 +1187,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/tts/status', (req, res) => {
+app.get('/api/tts/status', async (req, res) => {
     const mask = (s) => {
         if (!s) return '';
         const str = String(s);
@@ -967,16 +1195,21 @@ app.get('/api/tts/status', (req, res) => {
         return `${str.slice(0, 3)}***${str.slice(-3)}`;
     };
 
+    const effectiveAllowedSpeakerIds = await getEffectiveVoiceCloneAllowedSpeakerIds();
+
     res.json({
         success: true,
         data: {
-            configured: Boolean(VOLC_TTS_APP_ID && VOLC_TTS_ACCESS_KEY),
+            configured: Boolean(VOLC_TTS_APP_ID && VOLC_TTS_ACCESS_TOKEN),
             appId: mask(VOLC_TTS_APP_ID),
-            accessKey: mask(VOLC_TTS_ACCESS_KEY),
+            accessToken: mask(VOLC_TTS_ACCESS_TOKEN),
             resourceIdV2: VOLC_TTS_RESOURCE_ID_V2,
             resourceIdV1: VOLC_TTS_RESOURCE_ID_V1,
             resourceIdIcl1: VOLC_TTS_RESOURCE_ID_ICL1,
             resourceIdIcl2: VOLC_TTS_RESOURCE_ID_ICL2,
+            voiceCloneResourceId: VOLC_VOICECLONE_RESOURCE_ID,
+            voiceCloneSpeakerId: VOLC_VOICECLONE_SPEAKER_ID,
+            voiceCloneAllowedSpeakerIds: effectiveAllowedSpeakerIds,
             modelV2: VOLC_TTS_MODEL_V2 || ''
         }
     });
@@ -1038,6 +1271,155 @@ app.delete('/api/tts/voices/:id', async (req, res) => {
         res.json({ success: true, message: '已删除' });
     } catch (error) {
         res.status(500).json({ success: false, message: '删除音色失败' });
+    }
+});
+
+function getVolcVoiceCloneResourceIdByModelType(modelType) {
+    if (VOLC_VOICECLONE_RESOURCE_ID) return VOLC_VOICECLONE_RESOURCE_ID;
+    const mt = Number(modelType);
+    if (mt === 4) return VOLC_TTS_RESOURCE_ID_ICL2;
+    return VOLC_TTS_RESOURCE_ID_ICL1;
+}
+
+async function volcVoiceClonePost({ url, resourceId, payload }) {
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer;${VOLC_TTS_ACCESS_TOKEN}`,
+        'Resource-Id': resourceId
+    };
+
+    const resp = await axios.post(url, payload, {
+        headers,
+        timeout: 30000,
+        validateStatus: () => true
+    });
+
+    if (resp.status >= 200 && resp.status < 300) return resp.data;
+
+    const ttLogId = resp && resp.headers ? (resp.headers['x-tt-logid'] || resp.headers['X-Tt-Logid']) : '';
+    const err = new Error(`Volc API 请求失败(${resp.status})${ttLogId ? ` logid=${ttLogId}` : ''}`);
+    err.status = resp.status;
+    err.ttLogId = ttLogId;
+    err.data = resp.data;
+    err.url = url;
+    err.resourceId = resourceId;
+    throw err;
+}
+
+app.post('/api/voice-clone/upload', async (req, res) => {
+    try {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎鉴权信息' });
+        }
+        const effectiveAllowedSpeakerIds = await getEffectiveVoiceCloneAllowedSpeakerIds();
+
+        const speakerId = typeof req.body.speaker_id === 'string' ? req.body.speaker_id.trim() : '';
+        const audioBytes = typeof req.body.audio_bytes === 'string' ? req.body.audio_bytes.trim() : '';
+        const audioFormat = typeof req.body.audio_format === 'string' ? req.body.audio_format.trim() : '';
+        const modelTypeRaw = req.body.model_type;
+        const modelType = Number.isFinite(Number(modelTypeRaw)) ? Number(modelTypeRaw) : 4;
+        const languageRaw = req.body.language;
+        const language = Number.isFinite(Number(languageRaw)) ? Number(languageRaw) : 0;
+        const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
+        const demoText = typeof req.body.demo_text === 'string' ? req.body.demo_text.trim() : '';
+        const enableAudioDenoiseRaw = req.body.enable_audio_denoise;
+        const enableAudioDenoise = typeof enableAudioDenoiseRaw === 'boolean' ? enableAudioDenoiseRaw : undefined;
+
+        if (!speakerId) return res.status(400).json({ success: false, message: '缺少 speaker_id' });
+        if (effectiveAllowedSpeakerIds.length > 0 && !effectiveAllowedSpeakerIds.includes(speakerId)) {
+            return res.status(400).json({ success: false, message: 'speaker_id 不在允许列表中（请使用控制台提供的固定 speaker_id）' });
+        }
+        if (!audioBytes) return res.status(400).json({ success: false, message: '缺少音频数据' });
+        if (!audioFormat) return res.status(400).json({ success: false, message: '缺少 audio_format' });
+
+        const resourceId = getVolcVoiceCloneResourceIdByModelType(modelType);
+        const extraParams = {};
+        if (demoText) extraParams.demo_text = demoText;
+        if (typeof enableAudioDenoise === 'boolean') {
+            extraParams.enable_audio_denoise = enableAudioDenoise;
+        } else {
+            extraParams.enable_audio_denoise = modelType === 4 ? false : true;
+        }
+
+        const payload = {
+            appid: String(VOLC_TTS_APP_ID),
+            speaker_id: speakerId,
+            audios: [{ audio_bytes: audioBytes, audio_format: audioFormat }],
+            source: 2,
+            language,
+            model_type: modelType,
+            extra_params: JSON.stringify(extraParams)
+        };
+        if (text) payload.text = text;
+
+        const data = await volcVoiceClonePost({
+            url: 'https://openspeech.bytedance.com/api/v1/mega_tts/audio/upload',
+            resourceId,
+            payload
+        });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        const status = Number(error && (error.status || (error.response && error.response.status)) || 0);
+        const data = error && (error.data || (error.response && error.response.data));
+        const detail = data ? JSON.stringify(data) : (error && error.message ? String(error.message) : 'API Error');
+        const licenseHint = (status === 403 && /license not found/i.test(detail)) ? '（无权限：请确认控制台已开通/购买声音复刻资源，并使用正确 Resource-Id：seed-icl-1.0 或 seed-icl-2.0）' : '';
+        const authHint = (status === 401 || status === 403) ? '（鉴权失败：请确认使用控制台 Access Token 配置 VOLC_TTS_ACCESS_TOKEN，并正确设置 VOLC_TTS_APP_ID）' : '';
+        res.status(500).json({
+            success: false,
+            message: `声音复刻上传失败${licenseHint || authHint}`,
+            error: detail,
+            meta: {
+                status,
+                logid: error && error.ttLogId ? String(error.ttLogId) : '',
+                resourceId: error && error.resourceId ? String(error.resourceId) : '',
+                url: error && error.url ? String(error.url) : ''
+            }
+        });
+    }
+});
+
+app.post('/api/voice-clone/status', async (req, res) => {
+    try {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎鉴权信息' });
+        }
+        const effectiveAllowedSpeakerIds = await getEffectiveVoiceCloneAllowedSpeakerIds();
+
+        const speakerId = typeof req.body.speaker_id === 'string' ? req.body.speaker_id.trim() : '';
+        const modelTypeRaw = req.body.model_type;
+        const modelType = Number.isFinite(Number(modelTypeRaw)) ? Number(modelTypeRaw) : 4;
+        if (!speakerId) return res.status(400).json({ success: false, message: '缺少 speaker_id' });
+        if (effectiveAllowedSpeakerIds.length > 0 && !effectiveAllowedSpeakerIds.includes(speakerId)) {
+            return res.status(400).json({ success: false, message: 'speaker_id 不在允许列表中（请使用控制台提供的固定 speaker_id）' });
+        }
+
+        const resourceId = getVolcVoiceCloneResourceIdByModelType(modelType);
+        const payload = { appid: String(VOLC_TTS_APP_ID), speaker_id: speakerId };
+        const data = await volcVoiceClonePost({
+            url: 'https://openspeech.bytedance.com/api/v1/mega_tts/status',
+            resourceId,
+            payload
+        });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        const status = Number(error && (error.status || (error.response && error.response.status)) || 0);
+        const data = error && (error.data || (error.response && error.response.data));
+        const detail = data ? JSON.stringify(data) : (error && error.message ? String(error.message) : 'API Error');
+        const licenseHint = (status === 403 && /license not found/i.test(detail)) ? '（无权限：请确认控制台已开通/购买声音复刻资源，并使用正确 Resource-Id：seed-icl-1.0 或 seed-icl-2.0）' : '';
+        const authHint = (status === 401 || status === 403) ? '（鉴权失败：请确认使用控制台 Access Token 配置 VOLC_TTS_ACCESS_TOKEN，并正确设置 VOLC_TTS_APP_ID）' : '';
+        res.status(500).json({
+            success: false,
+            message: `获取复刻状态失败${licenseHint || authHint}`,
+            error: detail,
+            meta: {
+                status,
+                logid: error && error.ttLogId ? String(error.ttLogId) : '',
+                resourceId: error && error.resourceId ? String(error.resourceId) : '',
+                url: error && error.url ? String(error.url) : ''
+            }
+        });
     }
 });
 
@@ -1122,6 +1504,9 @@ app.post('/api/settings/cleanup', (req, res) => {
 // 启动服务器
 async function startServer() {
     await ensureDirectories();
+    migrateHeicImages().catch((err) => {
+        console.error('HEIC 迁移执行失败:', err);
+    });
     
     // 启动后立即执行一次，之后每小时执行一次
     runAutoCleanup();

@@ -6,11 +6,93 @@
   --bg: #f2f6ff;
 }
 
+html.dark,
+body.dark {
+  color-scheme: dark;
+  --surface: rgba(17, 24, 39, 0.92);
+  --bg: #0b1220;
+}
+
 body {
   background: radial-gradient(1200px 600px at 20% -10%, rgba(37, 99, 235, 0.14), transparent 60%),
     radial-gradient(900px 500px at 90% 10%, rgba(59, 130, 246, 0.12), transparent 55%),
     radial-gradient(900px 500px at 50% 110%, rgba(37, 99, 235, 0.10), transparent 60%),
     var(--bg);
+}
+
+.dark body {
+  color: #e5e7eb;
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(37, 99, 235, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 90% 10%, rgba(59, 130, 246, 0.08), transparent 55%),
+    radial-gradient(900px 500px at 50% 110%, rgba(37, 99, 235, 0.08), transparent 60%),
+    var(--bg) !important;
+}
+
+.dark .glass-effect {
+  background: var(--surface) !important;
+  border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+.dark .nav-bar {
+  background: rgba(17, 24, 39, 0.95) !important;
+  border-top-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+.dark .bg-white {
+  background-color: rgba(17, 24, 39, 0.92) !important;
+}
+
+.dark .bg-gray-50 {
+  background-color: rgba(17, 24, 39, 0.72) !important;
+}
+
+.dark .bg-gray-100 {
+  background-color: rgba(17, 24, 39, 0.85) !important;
+}
+
+.dark .border-gray-200 {
+  border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+.dark .border-gray-300 {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.dark .text-gray-900 {
+  color: #f9fafb !important;
+}
+
+.dark .text-gray-800 {
+  color: #f3f4f6 !important;
+}
+
+.dark .text-gray-700 {
+  color: #e5e7eb !important;
+}
+
+.dark .text-gray-600 {
+  color: #d1d5db !important;
+}
+
+.dark .text-gray-500 {
+  color: #9ca3af !important;
+}
+
+.dark .text-gray-400 {
+  color: #9ca3af !important;
+}
+
+.dark input,
+.dark textarea,
+.dark select {
+  background-color: rgba(17, 24, 39, 0.65) !important;
+  color: #e5e7eb !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: rgba(156, 163, 175, 0.9) !important;
 }
 
 .upload-area {
