@@ -161,13 +161,32 @@ class MediaShareApp {
         const mediaInput = document.getElementById('mediaInput');
         const fileInput = document.getElementById('fileInput');
         const uploadArea = document.getElementById('uploadArea');
+        const textInput = document.getElementById('textInput');
+        const composerPlaceholder = document.getElementById('composerPlaceholder');
         const chooseMediaBtn = document.getElementById('chooseMediaBtn');
         const chooseFileBtn = document.getElementById('chooseFileBtn');
         
+        const syncComposerMode = ({ forceInputVisible } = {}) => {
+            if (!textInput) return;
+            const hasText = typeof textInput.value === 'string' && textInput.value.trim().length > 0;
+            const hasFiles = Array.isArray(this.filesToUpload) && this.filesToUpload.some(f => f);
+            const shouldShowInput = !!forceInputVisible || hasText || hasFiles;
+
+            if (shouldShowInput) {
+                textInput.classList.remove('hidden');
+                if (composerPlaceholder) composerPlaceholder.classList.add('hidden');
+            } else {
+                textInput.classList.add('hidden');
+                if (composerPlaceholder) composerPlaceholder.classList.remove('hidden');
+            }
+        };
+
         if (uploadArea) {
-            uploadArea.addEventListener('click', () => {
-                if (mediaInput) return mediaInput.click();
-                if (fileInput) return fileInput.click();
+            uploadArea.addEventListener('click', (e) => {
+                const target = e && e.target ? e.target : null;
+                if (target && target.closest && target.closest('#textInput')) return;
+                syncComposerMode({ forceInputVisible: true });
+                if (textInput) textInput.focus();
             });
             uploadArea.addEventListener('dragover', (e) => this.handleDragOver(e));
             uploadArea.addEventListener('drop', (e) => this.handleDrop(e));
@@ -182,18 +201,33 @@ class MediaShareApp {
 
         const bindPress = (el, handler) => {
             if (!el) return;
-            el.addEventListener('click', handler);
-            el.addEventListener('pointerup', handler);
-            el.addEventListener('touchend', handler, { passive: false });
+            let lastTriggerAt = 0;
+            const wrapped = (e) => {
+                if (e) {
+                    if (e.cancelable) e.preventDefault();
+                    if (e.stopPropagation) e.stopPropagation();
+                }
+                const now = Date.now();
+                if (now - lastTriggerAt < 700) return;
+                lastTriggerAt = now;
+                handler(e);
+            };
+
+            const hasPointer = typeof window !== 'undefined' && 'PointerEvent' in window;
+            if (hasPointer) {
+                el.addEventListener('pointerup', wrapped);
+                el.addEventListener('click', wrapped);
+            } else {
+                el.addEventListener('touchend', wrapped, { passive: false });
+                el.addEventListener('click', wrapped);
+            }
         };
 
         bindPress(chooseMediaBtn, (e) => {
-            if (e) e.preventDefault();
             if (mediaInput) mediaInput.click();
         });
 
         bindPress(chooseFileBtn, (e) => {
-            if (e) e.preventDefault();
             if (fileInput) fileInput.click();
         });
         
@@ -201,6 +235,12 @@ class MediaShareApp {
         if (publishBtn) {
             publishBtn.addEventListener('click', () => this.publishContent());
         }
+
+        if (textInput) {
+            textInput.addEventListener('input', () => syncComposerMode());
+            textInput.addEventListener('blur', () => syncComposerMode());
+        }
+        syncComposerMode();
         
         const filterBtns = document.querySelectorAll('.filter-btn');
         filterBtns.forEach(btn => {
@@ -1341,6 +1381,11 @@ class MediaShareApp {
         if (!previewArea || !previewGrid) return;
         
         previewArea.classList.remove('hidden');
+
+        const textInput = document.getElementById('textInput');
+        const composerPlaceholder = document.getElementById('composerPlaceholder');
+        if (textInput) textInput.classList.remove('hidden');
+        if (composerPlaceholder) composerPlaceholder.classList.add('hidden');
         
         files.forEach(file => {
             // 将文件添加到待上传列表
@@ -1414,6 +1459,14 @@ class MediaShareApp {
             const previewArea = document.getElementById('previewArea');
             if (previewArea) previewArea.classList.add('hidden');
             this.filesToUpload = []; // 重置
+
+            const textInput = document.getElementById('textInput');
+            const composerPlaceholder = document.getElementById('composerPlaceholder');
+            const hasText = textInput && typeof textInput.value === 'string' && textInput.value.trim().length > 0;
+            if (!hasText) {
+                if (textInput) textInput.classList.add('hidden');
+                if (composerPlaceholder) composerPlaceholder.classList.remove('hidden');
+            }
         }
     }
     
