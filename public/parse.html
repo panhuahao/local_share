@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频解析</title>
+    <link rel="stylesheet" href="/tailwind.css?v=2.1.5">
+    <link rel="stylesheet" href="/theme.css?v=2.1.5">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Noto Sans SC', sans-serif; }
+        
+        body {
+            background: transparent;
+            color: #111827;
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(15, 23, 42, 0.10);
+        }
+        
+        .nav-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 40;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            transition: all 0.3s ease;
+        }
+        
+        .nav-item.active {
+            color: #2563eb;
+        }
+        
+        .content-wrapper {
+            padding-bottom: calc(140px + env(safe-area-inset-bottom));
+        }
+        
+        .nav-bar {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+    </style>
+</head>
+<body>
+    <header class="glass-effect sticky top-0 z-40 px-4 py-3">
+        <div class="flex items-center justify-between max-w-6xl mx-auto">
+            <div class="flex items-center space-x-3">
+                <button onclick="history.back()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                </button>
+                <h1 class="text-xl font-bold text-gray-800">视频解析</h1>
+            </div>
+            <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+            </div>
+        </div>
+    </header>
+
+    <main class="content-wrapper max-w-6xl mx-auto px-4 py-6">
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold">解</span>
+                    </div>
+                    <div>
+                        <div class="text-base font-semibold text-gray-800">解析服务配置</div>
+                        <div class="text-xs text-gray-500">配置会保存在当前浏览器中</div>
+                    </div>
+                </div>
+                <button id="toggleConfigBtn" type="button" class="px-3 py-2 rounded-lg bg-gray-100 text-xs text-gray-700 hover:bg-gray-200 transition-colors">展开/收起</button>
+            </div>
+            <div id="configPanel" class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4 hidden">
+                <div>
+                    <div class="text-xs text-gray-600 mb-1">接口地址</div>
+                    <input id="baseUrlInput" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="192.168.5.41:8086" />
+                </div>
+                <div>
+                    <div class="text-xs text-gray-600 mb-1">账号</div>
+                    <input id="usernameInput" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="admin" />
+                </div>
+                <div>
+                    <div class="text-xs text-gray-600 mb-1">密码</div>
+                    <input id="passwordInput" type="password" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="admin" />
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">分享链接/文案</h2>
+            </div>
+            <textarea id="shareInput" class="w-full min-h-[140px] px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm resize-none" placeholder="粘贴分享文本或链接（支持包含中文、符号、换行）。例如：&#10;5.66 MjC:/ U@l.cN 04/17 河南三亚变天了... https://v.douyin.com/_AbaiGNk-sA/ 复制此链接，打开Dou音搜索..."></textarea>
+            <div class="flex items-center justify-between gap-3 mt-4 flex-wrap">
+                <div id="statusText" class="text-xs text-gray-500"></div>
+                <div class="flex items-center gap-3">
+                    <button id="clearBtn" type="button" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm">清空</button>
+                    <button id="parseBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">开始解析</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="resultSection" class="glass-effect rounded-2xl p-6 shadow-lg hidden">
+            <div class="flex items-center gap-3 mb-4">
+                <img id="authorAvatar" class="w-10 h-10 rounded-full bg-gray-200 object-cover" alt="" />
+                <div class="flex-1 min-w-0">
+                    <div id="authorName" class="text-sm font-semibold text-gray-800 truncate"></div>
+                    <div id="videoTitle" class="text-xs text-gray-500 truncate"></div>
+                </div>
+            </div>
+
+            <div class="rounded-xl overflow-hidden bg-black">
+                <video id="videoPlayer" controls playsinline class="w-full h-auto"></video>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+                <button id="copyLinkBtn" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">复制视频链接</button>
+                <button id="copyTextBtn" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">复制文案</button>
+                <a id="downloadVideoBtn" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors text-center" href="#" download>保存视频</a>
+                <a id="downloadCoverBtn" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors text-center" href="#" download>保存封面</a>
+            </div>
+
+            <div class="flex items-center justify-between gap-3 mt-4 flex-wrap">
+                <div class="text-xs text-gray-500 truncate">
+                    <span class="text-gray-400">来源：</span><span id="sourceUrlText"></span>
+                </div>
+                <button id="publishBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">下载并发布到首页</button>
+            </div>
+        </div>
+        <div class="h-24"></div>
+    </main>
+
+    <nav class="nav-bar">
+        <div class="flex items-center justify-around py-2">
+            <a href="/" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 5a2 2 0 012-2h2a2 2 0 012 2v0H8v0z"></path>
+                </svg>
+                <span class="text-xs">首页</span>
+            </a>
+
+            <a href="/tts.html" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                </svg>
+                <span class="text-xs">语音</span>
+            </a>
+
+            <a href="/parse.html" class="nav-item active flex flex-col items-center py-2 px-4">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+                <span class="text-xs">视频解析</span>
+            </a>
+
+            <a href="/history.html" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="text-xs">历史</span>
+            </a>
+
+            <a href="/settings.html" class="nav-item flex flex-col items-center py-2 px-4 text-gray-500">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <span class="text-xs">设置</span>
+            </a>
+        </div>
+    </nav>
+
+    <script>
+        const LS_KEYS = {
+            baseUrl: 'video_parser_base_url',
+            username: 'video_parser_username',
+            password: 'video_parser_password'
+        };
+
+        const el = (id) => document.getElementById(id);
+
+        const statusText = el('statusText');
+        const toggleConfigBtn = el('toggleConfigBtn');
+        const configPanel = el('configPanel');
+        const baseUrlInput = el('baseUrlInput');
+        const usernameInput = el('usernameInput');
+        const passwordInput = el('passwordInput');
+        const shareInput = el('shareInput');
+        const parseBtn = el('parseBtn');
+        const clearBtn = el('clearBtn');
+
+        const resultSection = el('resultSection');
+        const authorAvatar = el('authorAvatar');
+        const authorName = el('authorName');
+        const videoTitle = el('videoTitle');
+        const videoPlayer = el('videoPlayer');
+        const copyLinkBtn = el('copyLinkBtn');
+        const copyTextBtn = el('copyTextBtn');
+        const downloadVideoBtn = el('downloadVideoBtn');
+        const downloadCoverBtn = el('downloadCoverBtn');
+        const sourceUrlText = el('sourceUrlText');
+        const publishBtn = el('publishBtn');
+
+        const state = { parsed: null, sourceUrl: '' };
+
+        function loadConfig() {
+            baseUrlInput.value = localStorage.getItem(LS_KEYS.baseUrl) || '192.168.5.41:8086';
+            usernameInput.value = localStorage.getItem(LS_KEYS.username) || 'admin';
+            passwordInput.value = localStorage.getItem(LS_KEYS.password) || 'admin';
+        }
+
+        function saveConfig() {
+            localStorage.setItem(LS_KEYS.baseUrl, baseUrlInput.value.trim());
+            localStorage.setItem(LS_KEYS.username, usernameInput.value.trim());
+            localStorage.setItem(LS_KEYS.password, passwordInput.value);
+        }
+
+        function setStatus(text, tone) {
+            statusText.textContent = text || '';
+            statusText.className = 'text-xs ' + (tone === 'error' ? 'text-red-600' : (tone === 'success' ? 'text-green-600' : 'text-gray-500'));
+        }
+
+        async function copyText(value) {
+            const text = typeof value === 'string' ? value : '';
+            if (!text) return false;
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }
+            } catch {}
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                const ok = document.execCommand('copy');
+                ta.remove();
+                return ok;
+            } catch {}
+            return false;
+        }
+
+        function buildProxyUrl(url, opts) {
+            const q = new URLSearchParams();
+            q.set('url', url);
+            if (opts && opts.download) q.set('download', '1');
+            if (opts && opts.filename) q.set('filename', opts.filename);
+            return '/api/video-parser/proxy?' + q.toString();
+        }
+
+        function renderResult(parsed, sourceUrl) {
+            state.parsed = parsed;
+            state.sourceUrl = sourceUrl || '';
+
+            const data = parsed && parsed.data ? parsed.data : null;
+            const author = data && data.author ? data.author : null;
+
+            authorAvatar.src = (author && author.avatar) ? buildProxyUrl(author.avatar) : '';
+            authorName.textContent = (author && author.name) ? author.name : '';
+            videoTitle.textContent = data && data.title ? data.title : '';
+            sourceUrlText.textContent = state.sourceUrl || '';
+
+            const videoUrl = data && data.video_url ? data.video_url : '';
+            const coverUrl = data && data.cover_url ? data.cover_url : '';
+
+            if (coverUrl) videoPlayer.poster = buildProxyUrl(coverUrl);
+            videoPlayer.src = videoUrl ? buildProxyUrl(videoUrl) : '';
+
+            const titleSafe = (data && data.title ? data.title : 'video').slice(0, 40);
+            downloadVideoBtn.href = videoUrl ? buildProxyUrl(videoUrl, { download: true, filename: titleSafe + '.mp4' }) : '#';
+            downloadCoverBtn.href = coverUrl ? buildProxyUrl(coverUrl, { download: true, filename: titleSafe + '.webp' }) : '#';
+
+            resultSection.classList.remove('hidden');
+        }
+
+        async function parse() {
+            saveConfig();
+            const baseUrl = baseUrlInput.value.trim();
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+            const input = shareInput.value || '';
+
+            if (!baseUrl) return setStatus('请先填写接口地址', 'error');
+            if (!username || !password) return setStatus('请先填写账号密码', 'error');
+            if (!input.trim()) return setStatus('请粘贴分享文本或链接', 'error');
+
+            setStatus('解析中...', '');
+            parseBtn.disabled = true;
+            parseBtn.textContent = '解析中...';
+            resultSection.classList.add('hidden');
+            state.parsed = null;
+
+            try {
+                const resp = await fetch('/api/video-parser/parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl, username, password, input })
+                });
+                const json = await resp.json().catch(() => null);
+                if (!resp.ok || !json || json.success !== true) {
+                    const msg = json && json.message ? json.message : '解析失败';
+                    setStatus(msg, 'error');
+                    return;
+                }
+                const remote = json.data;
+                if (!remote || remote.code !== 200 || !remote.data) {
+                    setStatus((remote && remote.msg) ? remote.msg : '解析失败', 'error');
+                    return;
+                }
+                renderResult(remote, json.sourceUrl);
+                setStatus('解析成功', 'success');
+            } catch (e) {
+                setStatus('网络错误，请重试', 'error');
+            } finally {
+                parseBtn.disabled = false;
+                parseBtn.textContent = '开始解析';
+            }
+        }
+
+        async function publish() {
+            const parsed = state.parsed;
+            const data = parsed && parsed.data ? parsed.data : null;
+            if (!data || !data.video_url) {
+                setStatus('没有可发布的视频', 'error');
+                return;
+            }
+
+            publishBtn.disabled = true;
+            publishBtn.textContent = '下载发布中...';
+            setStatus('下载并发布中（大视频可能需要等待）...', '');
+            try {
+                const author = data.author || {};
+                const resp = await fetch('/api/video-parser/publish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        videoUrl: data.video_url,
+                        coverUrl: data.cover_url || '',
+                        title: data.title || '',
+                        authorName: author.name || '',
+                        sourceUrl: state.sourceUrl || ''
+                    })
+                });
+                const json = await resp.json().catch(() => null);
+                if (!resp.ok || !json || json.success !== true) {
+                    const msg = json && json.message ? json.message : '发布失败';
+                    setStatus(msg, 'error');
+                    return;
+                }
+                setStatus('已发布到首页（返回首页即可看到）', 'success');
+            } catch {
+                setStatus('网络错误，请重试', 'error');
+            } finally {
+                publishBtn.disabled = false;
+                publishBtn.textContent = '下载并发布到首页';
+            }
+        }
+
+        toggleConfigBtn.addEventListener('click', () => {
+            configPanel.classList.toggle('hidden');
+        });
+        baseUrlInput.addEventListener('input', saveConfig);
+        usernameInput.addEventListener('input', saveConfig);
+        passwordInput.addEventListener('input', saveConfig);
+        parseBtn.addEventListener('click', parse);
+        clearBtn.addEventListener('click', () => {
+            shareInput.value = '';
+            setStatus('', '');
+            resultSection.classList.add('hidden');
+            state.parsed = null;
+        });
+        copyLinkBtn.addEventListener('click', async () => {
+            const data = state.parsed && state.parsed.data ? state.parsed.data : null;
+            const ok = await copyText(data && data.video_url ? data.video_url : '');
+            setStatus(ok ? '已复制视频链接' : '复制失败', ok ? 'success' : 'error');
+        });
+        copyTextBtn.addEventListener('click', async () => {
+            const data = state.parsed && state.parsed.data ? state.parsed.data : null;
+            const txt = data && data.title ? data.title : '';
+            const ok = await copyText(txt);
+            setStatus(ok ? '已复制文案' : '复制失败', ok ? 'success' : 'error');
+        });
+        publishBtn.addEventListener('click', publish);
+
+        shareInput.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') parse();
+        });
+
+        loadConfig();
+    </script>
+</body>
+</html>

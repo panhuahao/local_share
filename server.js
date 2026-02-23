@@ -107,6 +107,72 @@ function replaceFileExt(name, extWithDot) {
     return `${parsed.name}${ext}`;
 }
 
+function normalizeExternalBaseUrl(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+    return withScheme.replace(/\/+$/, '');
+}
+
+function stripUrlTailPunct(value) {
+    let s = typeof value === 'string' ? value.trim() : '';
+    if (!s) return '';
+    const tail = new Set([")", "]", "}", "，", "。", "！", "？", "》", "】", "”", "’", "\"", "'", "`"]);
+    while (s.length && tail.has(s[s.length - 1])) s = s.slice(0, -1);
+    return s;
+}
+
+function extractFirstHttpUrl(text) {
+    const raw = typeof text === 'string' ? text : '';
+    const match = raw.match(/https?:\/\/[^\s<>"'`]+/i);
+    if (!match) return '';
+    return stripUrlTailPunct(match[0]);
+}
+
+function buildCookieHeader(setCookie) {
+    if (!setCookie) return '';
+    const arr = Array.isArray(setCookie) ? setCookie : [String(setCookie)];
+    const parts = arr
+        .map((c) => String(c || '').split(';')[0].trim())
+        .filter(Boolean);
+    return parts.join('; ');
+}
+
+function isPrivateOrLocalHost(hostname) {
+    const host = String(hostname || '').toLowerCase();
+    if (!host) return true;
+    if (host === 'localhost' || host === 'localhost.localdomain') return true;
+    if (host === '0.0.0.0' || host === '127.0.0.1' || host === '::1') return true;
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const a = Number(m[1]), b = Number(m[2]);
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+}
+
+function normalizeHttpUrl(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return null;
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        return null;
+    }
+    const protocol = String(parsed.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') return null;
+    return parsed;
+}
+
+function safeFilenameFromTitle(title, fallback) {
+    const raw = typeof title === 'string' ? title.trim() : '';
+    const base = raw ? raw.slice(0, 40) : (fallback || 'video');
+    return base.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+}
+
 async function convertHeicToJpeg(inputPath, outputPath) {
     if (typeof heicConvert === 'function') {
         try {
@@ -691,6 +757,202 @@ app.post('/api/contents', upload.array('files', 10), async (req, res) => {
             success: false,
             message: '发布内容失败'
         });
+    }
+});
+
+app.post('/api/video-parser/parse', async (req, res) => {
+    try {
+        const baseUrl = normalizeExternalBaseUrl(req.body && req.body.baseUrl);
+        const username = typeof (req.body && req.body.username) === 'string' ? req.body.username.trim() : '';
+        const password = typeof (req.body && req.body.password) === 'string' ? req.body.password : '';
+        const input = typeof (req.body && req.body.input) === 'string' ? req.body.input : '';
+        const extractedUrl = extractFirstHttpUrl(input) || stripUrlTailPunct(input);
+        const parsedUrl = normalizeHttpUrl(extractedUrl);
+
+        if (!baseUrl) return res.status(400).json({ success: false, message: '缺少接口地址' });
+        if (!username || !password) return res.status(400).json({ success: false, message: '缺少登录账号或密码' });
+        if (!parsedUrl) return res.status(400).json({ success: false, message: '未识别到可用的视频链接' });
+
+        const loginResp = await axios({
+            method: 'POST',
+            url: `${baseUrl}/api/login`,
+            headers: { 'Content-Type': 'application/json' },
+            data: { username, password, remember: true },
+            timeout: 10000,
+            validateStatus: () => true
+        });
+
+        const loginData = loginResp && loginResp.data ? loginResp.data : null;
+        if (!loginResp || loginResp.status !== 200 || !loginData || loginData.success !== true) {
+            return res.status(401).json({ success: false, message: '登录解析服务失败' });
+        }
+
+        const cookie = buildCookieHeader(loginResp.headers && loginResp.headers['set-cookie']);
+        const parseResp = await axios({
+            method: 'GET',
+            url: `${baseUrl}/video/share/url/parse`,
+            params: { url: parsedUrl.href },
+            headers: cookie ? { Cookie: cookie } : undefined,
+            timeout: 25000,
+            validateStatus: () => true
+        });
+
+        return res.json({
+            success: true,
+            sourceUrl: parsedUrl.href,
+            data: parseResp.data
+        });
+    } catch (error) {
+        console.error('解析服务调用失败:', error && error.message ? error.message : error);
+        return res.status(500).json({ success: false, message: '解析服务调用失败' });
+    }
+});
+
+app.get('/api/video-parser/proxy', async (req, res) => {
+    try {
+        const urlValue = typeof req.query.url === 'string' ? req.query.url : '';
+        const download = typeof req.query.download === 'string' ? req.query.download : '';
+        const filenameHint = typeof req.query.filename === 'string' ? req.query.filename : '';
+        const parsed = normalizeHttpUrl(urlValue);
+        if (!parsed) return res.status(400).send('bad url');
+        if (isPrivateOrLocalHost(parsed.hostname)) return res.status(400).send('blocked');
+
+        const headers = {};
+        if (typeof req.headers.range === 'string' && req.headers.range.trim()) {
+            headers.Range = req.headers.range.trim();
+        }
+
+        const upstream = await axios({
+            method: 'GET',
+            url: parsed.href,
+            responseType: 'stream',
+            headers,
+            timeout: 30000,
+            validateStatus: () => true
+        });
+
+        res.status(upstream.status || 200);
+
+        const passHeaders = ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control', 'etag', 'last-modified'];
+        for (const key of passHeaders) {
+            const val = upstream.headers && upstream.headers[key];
+            if (val) res.setHeader(key, val);
+        }
+
+        if (download === '1') {
+            const safeName = safeFilenameFromTitle(filenameHint, 'download');
+            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
+        }
+
+        upstream.data.on('error', () => {
+            try { res.end(); } catch {}
+        });
+        upstream.data.pipe(res);
+    } catch (error) {
+        res.status(500).send('proxy error');
+    }
+});
+
+app.post('/api/video-parser/publish', async (req, res) => {
+    try {
+        const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+        const coverUrl = typeof (req.body && req.body.coverUrl) === 'string' ? req.body.coverUrl.trim() : '';
+        const title = typeof (req.body && req.body.title) === 'string' ? req.body.title.trim() : '';
+        const authorName = typeof (req.body && req.body.authorName) === 'string' ? req.body.authorName.trim() : '';
+        const sourceUrl = typeof (req.body && req.body.sourceUrl) === 'string' ? req.body.sourceUrl.trim() : '';
+
+        const parsed = normalizeHttpUrl(videoUrl);
+        if (!parsed) return res.status(400).json({ success: false, message: '无效的视频地址' });
+        if (isPrivateOrLocalHost(parsed.hostname)) return res.status(400).json({ success: false, message: '视频地址被拒绝' });
+
+        const fileId = uuidv4();
+        const outputFilename = `${fileId}.mp4`;
+        const outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+        const upstream = await axios({
+            method: 'GET',
+            url: parsed.href,
+            responseType: 'stream',
+            timeout: 60000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            validateStatus: () => true
+        });
+
+        if (!upstream || upstream.status < 200 || upstream.status >= 300) {
+            return res.status(502).json({ success: false, message: '下载视频失败' });
+        }
+
+        const ct = upstream.headers && upstream.headers['content-type'] ? String(upstream.headers['content-type']) : '';
+        const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+        if (Number.isFinite(clRaw) && clRaw > MAX_FILE_SIZE) {
+            return res.status(413).json({ success: false, message: '视频文件过大' });
+        }
+
+        await new Promise((resolve, reject) => {
+            const ws = fsSync.createWriteStream(outputPath);
+            let downloaded = 0;
+
+            const onData = (chunk) => {
+                downloaded += chunk ? chunk.length : 0;
+                if (downloaded > MAX_FILE_SIZE) {
+                    cleanup();
+                    reject(new Error('too large'));
+                    try { upstream.data.destroy(); } catch {}
+                    try { ws.destroy(); } catch {}
+                    try { fsSync.unlinkSync(outputPath); } catch {}
+                }
+            };
+
+            const cleanup = () => {
+                try { upstream.data.off('data', onData); } catch {}
+            };
+
+            upstream.data.on('data', onData);
+            upstream.data.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('finish', () => {
+                cleanup();
+                resolve();
+            });
+            upstream.data.pipe(ws);
+        });
+
+        const stats = await fs.stat(outputPath);
+        const displayTitle = safeFilenameFromTitle(title, 'video');
+        const displayAuthor = authorName ? `@${authorName}` : '';
+        const displayTextParts = [];
+        if (displayTitle) displayTextParts.push(displayTitle);
+        if (displayAuthor) displayTextParts.push(displayAuthor);
+        if (sourceUrl) displayTextParts.push(sourceUrl);
+
+        const contents = await readDataFile(CONTENTS_FILE);
+        const newVideoContent = {
+            id: uuidv4(),
+            type: 'video',
+            text: displayTextParts.join('\n'),
+            data: `/uploads/${outputFilename}`,
+            filename: `${displayTitle || 'video'}.mp4`,
+            size: stats.size,
+            mimetype: ct && /^video\//i.test(ct) ? ct : 'video/mp4',
+            coverUrl: coverUrl || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        contents.unshift(newVideoContent);
+        await writeDataFile(CONTENTS_FILE, contents);
+
+        res.json({ success: true, message: '已发布到首页', data: newVideoContent });
+    } catch (error) {
+        console.error('解析视频发布失败:', error && error.message ? error.message : error);
+        res.status(500).json({ success: false, message: '发布失败' });
     }
 });
 
