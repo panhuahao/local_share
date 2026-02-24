@@ -65,6 +65,25 @@ const VOLC_TTS_RESOURCE_ID_V1 = process.env.VOLC_TTS_RESOURCE_ID_V1 || 'seed-tts
 const VOLC_TTS_RESOURCE_ID_ICL1 = process.env.VOLC_TTS_RESOURCE_ID_ICL1 || 'seed-icl-1.0';
 const VOLC_TTS_RESOURCE_ID_ICL2 = process.env.VOLC_TTS_RESOURCE_ID_ICL2 || 'seed-icl-2.0';
 const VOLC_TTS_MODEL_V2 = process.env.VOLC_TTS_MODEL_V2 || '';
+const VOLC_ASR_RESOURCE_ID = process.env.VOLC_ASR_RESOURCE_ID || 'volc.seedasr.auc';
+
+const asrTaskResourceIdMap = new Map();
+
+function buildAsrResourceIdCandidates() {
+    const candidates = [
+        VOLC_ASR_RESOURCE_ID,
+        'volc.seedasr.auc',
+        'volc.bigasr.auc'
+    ]
+        .map((x) => (typeof x === 'string' ? x.trim() : ''))
+        .filter(Boolean);
+    return Array.from(new Set(candidates));
+}
+
+function isAsrResourceNotGrantedMessage(msg) {
+    const s = typeof msg === 'string' ? msg : '';
+    return /requested resource not granted/i.test(s) || /resource not granted/i.test(s);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -72,7 +91,47 @@ const PORT = process.env.PORT || 3000;
 // 配置
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 增加到 500MB，支持大视频上传
+const DEFAULT_MAX_UPLOAD_SIZE_MB = 500;
+const MAX_UPLOAD_SIZE_MB_LIMIT = 4096;
+const SERVER_SETTINGS_FILE = path.join(DATA_DIR, 'server_settings.json');
+
+let maxUploadFileSizeBytes = DEFAULT_MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+
+function normalizeMaxUploadSizeMB(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const mb = Math.round(n);
+    if (mb < 1) return null;
+    return Math.min(mb, MAX_UPLOAD_SIZE_MB_LIMIT);
+}
+
+function getMaxUploadFileSizeBytes() {
+    return maxUploadFileSizeBytes;
+}
+
+function getMaxUploadSizeMB() {
+    return Math.max(1, Math.round(getMaxUploadFileSizeBytes() / 1024 / 1024));
+}
+
+async function loadServerSettings() {
+    try {
+        const raw = await readDataFile(SERVER_SETTINGS_FILE, { maxUploadSizeMB: DEFAULT_MAX_UPLOAD_SIZE_MB });
+        const mb = normalizeMaxUploadSizeMB(raw && raw.maxUploadSizeMB);
+        if (mb) {
+            maxUploadFileSizeBytes = mb * 1024 * 1024;
+        }
+    } catch (error) {
+        console.error('读取服务端设置失败:', error);
+    }
+}
+
+async function saveServerSettings() {
+    try {
+        await writeDataFile(SERVER_SETTINGS_FILE, { maxUploadSizeMB: getMaxUploadSizeMB() });
+    } catch (error) {
+        console.error('写入服务端设置失败:', error);
+    }
+}
 
 function execFileAsync(file, args, options = {}) {
     return new Promise((resolve, reject) => {
@@ -173,6 +232,58 @@ function safeFilenameFromTitle(title, fallback) {
     return base.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
 }
 
+function getRequestBaseUrl(req) {
+    const protoRaw = (req.headers && (req.headers['x-forwarded-proto'] || req.headers['X-Forwarded-Proto'])) || '';
+    const proto = String(protoRaw || '').split(',')[0].trim() || (req.protocol || 'http');
+    const host = String((req.headers && (req.headers['x-forwarded-host'] || req.headers['host'])) || '').split(',')[0].trim();
+    if (!host) return '';
+    return `${proto}://${host}`;
+}
+
+function toPublicAudioUrl(req, audioPathOrUrl) {
+    const raw = typeof audioPathOrUrl === 'string' ? audioPathOrUrl.trim() : '';
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (!raw.startsWith('/')) return '';
+    const base = getRequestBaseUrl(req);
+    if (!base) return '';
+    return `${base}${raw}`;
+}
+
+function normalizePublicBaseUrl(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+        const u = new URL(withScheme);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+        if (!u.hostname) return '';
+        return u.origin;
+    } catch {
+        return '';
+    }
+}
+
+function toPublicAudioUrlWithOverride(req, audioPathOrUrl, publicBaseUrl) {
+    const raw = typeof audioPathOrUrl === 'string' ? audioPathOrUrl.trim() : '';
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (!raw.startsWith('/')) return '';
+    const override = normalizePublicBaseUrl(publicBaseUrl);
+    if (override) return `${override}${raw}`;
+    return toPublicAudioUrl(req, raw);
+}
+
+function inferAucAudioFormat({ filename, mimetype } = {}) {
+    const fn = typeof filename === 'string' ? filename.toLowerCase() : '';
+    const mt = typeof mimetype === 'string' ? mimetype.toLowerCase() : '';
+    if (fn.endsWith('.wav') || mt.includes('wav')) return 'wav';
+    if (fn.endsWith('.mp3') || mt.includes('mpeg')) return 'mp3';
+    if (fn.endsWith('.ogg') || mt.includes('ogg')) return 'ogg';
+    if (fn.endsWith('.opus') || mt.includes('opus')) return 'ogg';
+    return 'mp3';
+}
+
 async function convertHeicToJpeg(inputPath, outputPath) {
     if (typeof heicConvert === 'function') {
         try {
@@ -234,16 +345,17 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: MAX_FILE_SIZE
-    },
-    fileFilter: (req, file, cb) => {
-        // 允许所有类型的文件分享
-        cb(null, true);
-    }
-});
+function createUploadMiddleware() {
+    return multer({
+        storage: storage,
+        limits: {
+            fileSize: getMaxUploadFileSizeBytes()
+        },
+        fileFilter: (req, file, cb) => {
+            cb(null, true);
+        }
+    });
+}
 
 // 中间件
 app.use(cors());
@@ -660,7 +772,9 @@ app.get('/api/deleted', async (req, res) => {
 });
 
 // 创建新内容（带文件上传）
-app.post('/api/contents', upload.array('files', 10), async (req, res) => {
+app.post('/api/contents', (req, res, next) => {
+    createUploadMiddleware().array('files', 10)(req, res, next);
+}, async (req, res) => {
     try {
         const { text } = req.body;
         const files = req.files || [];
@@ -885,8 +999,10 @@ app.post('/api/video-parser/publish', async (req, res) => {
 
         const ct = upstream.headers && upstream.headers['content-type'] ? String(upstream.headers['content-type']) : '';
         const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
-        if (Number.isFinite(clRaw) && clRaw > MAX_FILE_SIZE) {
-            return res.status(413).json({ success: false, message: '视频文件过大' });
+        if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+            const limitMB = getMaxUploadSizeMB();
+            const sizeMB = Math.round(clRaw / 1024 / 1024);
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）` });
         }
 
         await new Promise((resolve, reject) => {
@@ -895,9 +1011,11 @@ app.post('/api/video-parser/publish', async (req, res) => {
 
             const onData = (chunk) => {
                 downloaded += chunk ? chunk.length : 0;
-                if (downloaded > MAX_FILE_SIZE) {
+                if (downloaded > getMaxUploadFileSizeBytes()) {
                     cleanup();
-                    reject(new Error('too large'));
+                    const err = new Error('FILE_TOO_LARGE');
+                    err.code = 'FILE_TOO_LARGE';
+                    reject(err);
                     try { upstream.data.destroy(); } catch {}
                     try { ws.destroy(); } catch {}
                     try { fsSync.unlinkSync(outputPath); } catch {}
@@ -952,6 +1070,11 @@ app.post('/api/video-parser/publish', async (req, res) => {
         res.json({ success: true, message: '已发布到首页', data: newVideoContent });
     } catch (error) {
         console.error('解析视频发布失败:', error && error.message ? error.message : error);
+        const code = error && (error.code || error.message) ? String(error.code || error.message) : '';
+        if (code === 'FILE_TOO_LARGE') {
+            const limitMB = getMaxUploadSizeMB();
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB）` });
+        }
         res.status(500).json({ success: false, message: '发布失败' });
     }
 });
@@ -1303,6 +1426,10 @@ app.post('/api/audio/to-mp4', async (req, res) => {
         exec(command, async (error) => {
             if (error) {
                 console.error('FFmpeg 转换失败:', error);
+                const msg = error && error.message ? String(error.message) : '';
+                if (error && (error.code === 127 || /ffmpeg: not found/i.test(msg) || /not found.*ffmpeg/i.test(msg))) {
+                    return res.status(500).json({ success: false, message: '服务器未安装 ffmpeg' });
+                }
                 return res.status(500).json({ success: false, message: '视频转换失败' });
             }
 
@@ -1333,6 +1460,74 @@ app.post('/api/audio/to-mp4', async (req, res) => {
         });
     } catch (error) {
         console.error('处理音频转换失败:', error);
+        res.status(500).json({ success: false, message: '处理失败' });
+    }
+});
+
+app.post('/api/video/to-mp3', async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ success: false, message: '未提供内容ID' });
+
+        const contents = await readDataFile(CONTENTS_FILE);
+        const item = contents.find(c => c.id === id);
+
+        if (!item || item.type !== 'video') {
+            return res.status(404).json({ success: false, message: '视频内容不存在' });
+        }
+
+        const inputPath = path.join(__dirname, stripLeadingSlash(item.data));
+        const outputFilename = `${uuidv4()}.mp3`;
+        const outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+        try {
+            await execFileAsync('ffmpeg', [
+                '-y',
+                '-i', inputPath,
+                '-map', '0:a:0',
+                '-vn',
+                '-ac', '1',
+                '-ar', '16000',
+                '-c:a', 'libmp3lame',
+                '-b:a', '128k',
+                outputPath
+            ]);
+        } catch (err) {
+            const code = err && err.code ? String(err.code) : '';
+            const stderr = err && err.stderr ? String(err.stderr) : '';
+            if (code === 'ENOENT') {
+                return res.status(500).json({ success: false, message: '服务器未安装 ffmpeg' });
+            }
+            if (/matches no streams|does not contain any stream/i.test(stderr)) {
+                return res.status(400).json({ success: false, message: '视频没有可提取的音频轨' });
+            }
+            return res.status(500).json({ success: false, message: '音频提取失败' });
+        }
+
+        const stats = await fs.stat(outputPath);
+
+        const newAudioContent = {
+            id: uuidv4(),
+            type: 'audio',
+            text: `[视频提取音频] ${item.text || ''}`,
+            data: `/uploads/${outputFilename}`,
+            filename: replaceFileExt(item.filename || 'video.mp4', '.mp3'),
+            size: stats.size,
+            mimetype: 'audio/mpeg',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        contents.unshift(newAudioContent);
+        await writeDataFile(CONTENTS_FILE, contents);
+
+        res.json({
+            success: true,
+            message: '音频提取成功',
+            data: newAudioContent
+        });
+    } catch (error) {
+        console.error('处理视频提取音频失败:', error);
         res.status(500).json({ success: false, message: '处理失败' });
     }
 });
@@ -1437,6 +1632,183 @@ app.post('/api/tts', async (req, res) => {
             message: shouldExpose ? detail : '语音生成失败，请检查 API 配置或网络连接',
             error: detail || 'API Error'
         });
+    }
+});
+
+app.post('/api/asr/upload', (req, res, next) => {
+    createUploadMiddleware().single('file')(req, res, next);
+}, async (req, res) => {
+    try {
+        const file = req.file;
+        if (!file) return res.status(400).json({ success: false, message: '请选择音频文件' });
+        const audioPath = `/uploads/${file.filename}`;
+        res.json({
+            success: true,
+            message: '上传成功',
+            data: {
+                path: audioPath,
+                filename: file.originalname || file.filename,
+                size: file.size,
+                mimetype: file.mimetype,
+                format: inferAucAudioFormat({ filename: file.originalname || file.filename, mimetype: file.mimetype })
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '上传失败' });
+    }
+});
+
+app.post('/api/asr/submit', async (req, res) => {
+    try {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎鉴权信息' });
+        }
+
+        const audioPathOrUrl = typeof (req.body && req.body.audio) === 'string' ? req.body.audio.trim() : '';
+        const publicBaseUrl = typeof (req.body && req.body.publicBaseUrl) === 'string' ? req.body.publicBaseUrl.trim() : '';
+        const audioPublicUrl = toPublicAudioUrlWithOverride(req, audioPathOrUrl, publicBaseUrl);
+        if (!audioPublicUrl) {
+            return res.status(400).json({ success: false, message: '无效的音频地址' });
+        }
+
+        const formatRaw = typeof (req.body && req.body.format) === 'string' ? req.body.format.trim().toLowerCase() : '';
+        const format = ['raw', 'wav', 'mp3', 'ogg'].includes(formatRaw) ? formatRaw : '';
+        const languageRaw = typeof (req.body && req.body.language) === 'string' ? req.body.language.trim() : '';
+
+        const taskId = uuidv4();
+        const url = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit';
+
+        const payload = {
+            user: { uid: 'media_share_platform' },
+            audio: {
+                url: audioPublicUrl,
+                format: format || 'mp3'
+            },
+            request: {
+                model_name: 'bigmodel',
+                enable_itn: true,
+                enable_punc: true
+            }
+        };
+
+        if (languageRaw) payload.audio.language = languageRaw;
+        const candidates = buildAsrResourceIdCandidates();
+        let last = { statusCode: '', apiMessage: '', logid: '', resourceId: '' };
+
+        for (const resourceId of candidates) {
+            const response = await axios.post(url, payload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Api-App-Key': VOLC_TTS_APP_ID,
+                    'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                    'X-Api-Resource-Id': resourceId,
+                    'X-Api-Request-Id': taskId,
+                    'X-Api-Sequence': '-1'
+                },
+                timeout: 60000,
+                validateStatus: () => true
+            });
+
+            const h = response && response.headers ? response.headers : {};
+            const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+            const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+            const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+            if (statusCode === '20000000') {
+                asrTaskResourceIdMap.set(taskId, resourceId);
+                return res.json({ success: true, message: '已提交', data: { taskId, audioUrl: audioPublicUrl } });
+            }
+
+            last = { statusCode, apiMessage, logid, resourceId };
+            if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+            const msg = apiMessage || '提交识别任务失败';
+            return res.status(502).json({
+                success: false,
+                message: logid ? `${msg}（logid=${logid}）` : msg,
+                data: { statusCode, logid, resourceId, audioUrl: audioPublicUrl }
+            });
+        }
+
+        const msg = last.apiMessage || '提交识别任务失败';
+        return res.status(502).json({
+            success: false,
+            message: last.logid ? `${msg}（logid=${last.logid}）` : msg,
+            data: { statusCode: last.statusCode, logid: last.logid, resourceId: last.resourceId, audioUrl: audioPublicUrl }
+        });
+    } catch (error) {
+        const detail = error && error.message ? String(error.message) : '';
+        res.status(500).json({ success: false, message: '提交识别任务失败', error: detail });
+    }
+});
+
+app.post('/api/asr/query', async (req, res) => {
+    try {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎鉴权信息' });
+        }
+
+        const taskId = typeof (req.body && req.body.taskId) === 'string' ? req.body.taskId.trim() : '';
+        if (!taskId) return res.status(400).json({ success: false, message: '缺少 taskId' });
+
+        const url = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/query';
+        const resourceCandidates = (() => {
+            const preferred = asrTaskResourceIdMap.get(taskId) || '';
+            const list = buildAsrResourceIdCandidates();
+            return Array.from(new Set([preferred, ...list].filter(Boolean)));
+        })();
+
+        let last = { statusCode: '', apiMessage: '', logid: '', resourceId: '' };
+
+        for (const resourceId of resourceCandidates) {
+            const response = await axios.post(url, {}, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Api-App-Key': VOLC_TTS_APP_ID,
+                    'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                    'X-Api-Resource-Id': resourceId,
+                    'X-Api-Request-Id': taskId,
+                    'X-Api-Sequence': '-1'
+                },
+                timeout: 60000,
+                validateStatus: () => true
+            });
+
+            const h = response && response.headers ? response.headers : {};
+            const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+            const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+            const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+            last = { statusCode, apiMessage, logid, resourceId };
+
+            if (response.status < 200 || response.status >= 300) {
+                const msg = apiMessage || '查询失败';
+                if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                return res.status(502).json({ success: false, message: logid ? `${msg}（logid=${logid}）` : msg, data: { statusCode, logid, resourceId } });
+            }
+
+            const body = response.data && typeof response.data === 'object' ? response.data : {};
+            const text = body && body.result && typeof body.result.text === 'string' ? body.result.text : '';
+
+            if (statusCode === '20000000') {
+                asrTaskResourceIdMap.set(taskId, resourceId);
+                return res.json({ success: true, message: '识别完成', data: { statusCode, text, raw: body } });
+            }
+
+            if (statusCode === '20000001' || statusCode === '20000002') {
+                asrTaskResourceIdMap.set(taskId, resourceId);
+                return res.json({ success: true, message: '处理中', data: { statusCode } });
+            }
+
+            const msg = apiMessage || (statusCode === '20000003' ? '静音音频' : '识别失败');
+            if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+            return res.json({ success: false, message: logid ? `${msg}（logid=${logid}）` : msg, data: { statusCode, raw: body, resourceId } });
+        }
+
+        const msg = last.apiMessage || '查询失败';
+        res.status(502).json({ success: false, message: last.logid ? `${msg}（logid=${last.logid}）` : msg, data: { statusCode: last.statusCode, logid: last.logid, resourceId: last.resourceId } });
+    } catch (error) {
+        const detail = error && error.message ? String(error.message) : '';
+        res.status(500).json({ success: false, message: '查询识别结果失败', error: detail });
     }
 });
 
@@ -1763,9 +2135,37 @@ app.post('/api/settings/cleanup', (req, res) => {
     });
 });
 
+app.get('/api/settings/upload', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            maxUploadSizeMB: getMaxUploadSizeMB()
+        }
+    });
+});
+
+app.post('/api/settings/upload', async (req, res) => {
+    const mb = normalizeMaxUploadSizeMB(req.body && req.body.maxUploadSizeMB);
+    if (!mb) {
+        return res.status(400).json({ success: false, message: '无效的上传大小限制' });
+    }
+
+    maxUploadFileSizeBytes = mb * 1024 * 1024;
+    await saveServerSettings();
+
+    res.json({
+        success: true,
+        message: '上传大小限制已更新',
+        data: {
+            maxUploadSizeMB: getMaxUploadSizeMB()
+        }
+    });
+});
+
 // 启动服务器
 async function startServer() {
     await ensureDirectories();
+    await loadServerSettings();
     migrateHeicImages().catch((err) => {
         console.error('HEIC 迁移执行失败:', err);
     });

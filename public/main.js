@@ -22,6 +22,7 @@ class MediaShareApp {
         this.voiceCloneRecordedBase64 = '';
         this.voiceCloneRecordedBlobUrl = '';
         this.voiceCloneRecordingState = null;
+        this.uploadLimitDirty = false;
         
         this.init();
     }
@@ -324,6 +325,34 @@ class MediaShareApp {
         if (vcStatusBtn) {
             vcStatusBtn.addEventListener('click', () => this.fetchVoiceCloneStatus({ startPolling: false }));
         }
+
+        const asrRefreshUploadedBtn = document.getElementById('asrRefreshUploadedBtn');
+        if (asrRefreshUploadedBtn) {
+            asrRefreshUploadedBtn.addEventListener('click', () => this.loadAsrUploadedAudios({ silent: false }));
+        }
+
+        const asrUploadRecognizeBtn = document.getElementById('asrUploadRecognizeBtn');
+        if (asrUploadRecognizeBtn) {
+            asrUploadRecognizeBtn.addEventListener('click', () => this.asrUploadAndRecognize());
+        }
+
+        const asrRecognizeSelectedBtn = document.getElementById('asrRecognizeSelectedBtn');
+        if (asrRecognizeSelectedBtn) {
+            asrRecognizeSelectedBtn.addEventListener('click', () => this.asrRecognizeSelected());
+        }
+
+        const asrCopyBtn = document.getElementById('asrCopyBtn');
+        if (asrCopyBtn) {
+            asrCopyBtn.addEventListener('click', (e) => {
+                const ta = document.getElementById('asrResultText');
+                this.copyText(ta && typeof ta.value === 'string' ? ta.value : '', e);
+            });
+        }
+
+        const asrPublishBtn = document.getElementById('asrPublishBtn');
+        if (asrPublishBtn) {
+            asrPublishBtn.addEventListener('click', () => this.asrPublishToHome());
+        }
     }
 
     async initTtsPage() {
@@ -335,6 +364,260 @@ class MediaShareApp {
         }
         await this.refreshTtsVoices({ silent: true });
         await this.fillVoiceCloneSpeakerId({ force: false });
+        this.initAsrPublicBaseUrlUI();
+        await this.loadAsrUploadedAudios({ silent: true });
+    }
+
+    normalizePublicBaseUrl(value) {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return '';
+        const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+        try {
+            const u = new URL(withScheme);
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+            if (!u.hostname) return '';
+            return u.origin;
+        } catch {
+            return '';
+        }
+    }
+
+    initAsrPublicBaseUrlUI() {
+        const input = document.getElementById('asrPublicBaseUrl');
+        const hint = document.getElementById('asrPublicBaseUrlHint');
+        const saveBtn = document.getElementById('asrSavePublicBaseUrlBtn');
+        if (!input) return;
+
+        const existing = this.normalizePublicBaseUrl(this.settings.asrPublicBaseUrl);
+        const fallback = this.normalizePublicBaseUrl(window.location.origin || '');
+        input.value = existing || fallback;
+        if (hint) hint.textContent = existing ? '已保存' : '默认使用当前访问域名';
+
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => {
+                const norm = this.normalizePublicBaseUrl(input.value);
+                if (!norm) {
+                    this.showNotification('域名格式无效', 'error');
+                    if (hint) hint.textContent = '域名格式无效';
+                    return;
+                }
+                this.settings.asrPublicBaseUrl = norm;
+                this.saveSettings();
+                if (hint) hint.textContent = '已保存';
+                this.showNotification('域名已保存', 'success');
+            });
+        }
+    }
+
+    setAsrStatus(text) {
+        const el = document.getElementById('asrStatusText');
+        if (!el) return;
+        el.textContent = text || '';
+    }
+
+    async loadAsrUploadedAudios({ silent } = {}) {
+        const select = document.getElementById('asrUploadedSelect');
+        if (!select) return;
+        try {
+            if (!silent) this.setAsrStatus('加载音频列表中...');
+            const resp = await this.apiRequest('/contents');
+            const items = Array.isArray(resp && resp.data) ? resp.data : [];
+            const audios = items.filter((x) => x && x.type === 'audio' && typeof x.data === 'string' && x.data.startsWith('/uploads/'));
+
+            select.innerHTML = '';
+            const opt0 = document.createElement('option');
+            opt0.value = '';
+            opt0.textContent = audios.length ? '请选择音频...' : '暂无已上传音频';
+            select.appendChild(opt0);
+
+            for (const a of audios) {
+                const name = typeof a.filename === 'string' && a.filename.trim() ? a.filename.trim() : (a.data.split('/').pop() || 'audio');
+                const size = Number.isFinite(Number(a.size)) ? this.formatFileSize(Number(a.size)) : '';
+                const time = typeof a.createdAt === 'string' ? a.createdAt : '';
+                const label = [name, size, time ? this.getTimeAgo(time) : ''].filter(Boolean).join(' · ');
+                const opt = document.createElement('option');
+                opt.value = a.data;
+                opt.textContent = label;
+                opt.dataset.filename = name;
+                opt.dataset.mimetype = typeof a.mimetype === 'string' ? a.mimetype : '';
+                select.appendChild(opt);
+            }
+
+            if (!silent) this.setAsrStatus(audios.length ? `已加载 ${audios.length} 条音频` : '暂无已上传音频');
+        } catch (err) {
+            if (!silent) this.setAsrStatus('加载音频列表失败');
+        }
+    }
+
+    inferAucFormatFromNameOrType(name, mimetype) {
+        const fn = typeof name === 'string' ? name.toLowerCase() : '';
+        const mt = typeof mimetype === 'string' ? mimetype.toLowerCase() : '';
+        if (fn.endsWith('.wav') || mt.includes('wav')) return 'wav';
+        if (fn.endsWith('.mp3') || mt.includes('mpeg')) return 'mp3';
+        if (fn.endsWith('.ogg') || mt.includes('ogg')) return 'ogg';
+        if (fn.endsWith('.opus') || mt.includes('opus')) return 'ogg';
+        return 'mp3';
+    }
+
+    async asrUploadAndRecognize() {
+        const input = document.getElementById('asrFileInput');
+        const file = input && input.files && input.files[0] ? input.files[0] : null;
+        if (!file) {
+            this.showNotification('请选择音频文件', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('asrUploadRecognizeBtn');
+        if (btn) btn.disabled = true;
+        this.setAsrStatus('上传中...');
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const resp = await fetch(`${this.apiBase}/asr/upload`, { method: 'POST', body: fd });
+            const json = await resp.json().catch(() => null);
+            if (!resp.ok || !json || json.success !== true) {
+                const msg = json && json.message ? String(json.message) : '上传失败';
+                throw new Error(msg);
+            }
+            const data = json.data || {};
+            const audioPath = typeof data.path === 'string' ? data.path : '';
+            const format = typeof data.format === 'string' ? data.format : this.inferAucFormatFromNameOrType(file.name, file.type);
+            await this.asrStartRecognize({ audio: audioPath, format, filename: file.name, mimetype: file.type });
+            await this.loadAsrUploadedAudios({ silent: true });
+        } catch (err) {
+            const msg = err && err.message ? String(err.message) : '上传失败';
+            this.setAsrStatus(msg);
+            this.showNotification(msg, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async asrRecognizeSelected() {
+        const select = document.getElementById('asrUploadedSelect');
+        if (!select) return;
+        const audio = typeof select.value === 'string' ? select.value : '';
+        if (!audio) {
+            this.showNotification('请选择已上传音频', 'warning');
+            return;
+        }
+        const opt = select.options && select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+        const filename = opt && opt.dataset ? opt.dataset.filename : '';
+        const mimetype = opt && opt.dataset ? opt.dataset.mimetype : '';
+        const format = this.inferAucFormatFromNameOrType(filename, mimetype);
+        const btn = document.getElementById('asrRecognizeSelectedBtn');
+        if (btn) btn.disabled = true;
+        try {
+            await this.asrStartRecognize({ audio, format, filename, mimetype });
+        } catch (err) {
+            const msgRaw = err && err.message ? String(err.message) : '识别失败';
+            const msg = /requested resource not granted/i.test(msgRaw)
+                ? '火山录音识别资源未开通/未授权，请在控制台开通后重试（AUC 录音识别）'
+                : msgRaw;
+            this.setAsrStatus(msg);
+            this.showNotification(msg, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async asrStartRecognize({ audio, format }) {
+        const languageInput = document.getElementById('asrLanguage');
+        const language = languageInput && typeof languageInput.value === 'string' ? languageInput.value.trim() : '';
+        const result = document.getElementById('asrResultText');
+        if (result) result.value = '';
+        this.setAsrStatus('提交识别任务中...');
+
+        const publicBaseUrlInput = document.getElementById('asrPublicBaseUrl');
+        const publicBaseUrlFromUI = publicBaseUrlInput && typeof publicBaseUrlInput.value === 'string' ? publicBaseUrlInput.value.trim() : '';
+        const publicBaseUrl = this.normalizePublicBaseUrl(publicBaseUrlFromUI) || this.normalizePublicBaseUrl(this.settings.asrPublicBaseUrl) || '';
+
+        let submit;
+        try {
+            submit = await this.apiRequest('/asr/submit', {
+                method: 'POST',
+                body: JSON.stringify({ audio, format, language, publicBaseUrl })
+            });
+        } catch (err) {
+            const msgRaw = err && err.message ? String(err.message) : '提交识别任务失败';
+            const msg = /requested resource not granted/i.test(msgRaw)
+                ? '火山录音识别资源未开通/未授权，请在控制台开通后重试（AUC 录音识别）'
+                : msgRaw;
+            this.setAsrStatus(msg);
+            throw new Error(msg);
+        }
+
+        const taskId = submit && submit.data && typeof submit.data.taskId === 'string' ? submit.data.taskId : '';
+        if (!taskId) throw new Error('提交失败');
+
+        this.setAsrStatus('识别中...');
+        const startedAt = Date.now();
+        const maxMs = 6 * 60 * 1000;
+
+        while (true) {
+            if (Date.now() - startedAt > maxMs) throw new Error('识别超时，请稍后重试');
+            await new Promise((r) => setTimeout(r, 2000));
+            const q = await this.apiRequest('/asr/query', {
+                method: 'POST',
+                body: JSON.stringify({ taskId })
+            });
+            const statusCode = q && q.data && typeof q.data.statusCode === 'string' ? q.data.statusCode : '';
+            if (q.success === true && statusCode === '20000000') {
+                const text = q.data && typeof q.data.text === 'string' ? q.data.text : '';
+                if (result) result.value = text || '';
+                this.setAsrStatus('识别完成');
+                this.showNotification('识别完成', 'success');
+                return;
+            }
+            if (q.success === true && (statusCode === '20000001' || statusCode === '20000002')) {
+                this.setAsrStatus('识别中...');
+                continue;
+            }
+            const msg = q && typeof q.message === 'string' && q.message.trim() ? q.message.trim() : '识别失败';
+            throw new Error(msg);
+        }
+    }
+
+    async asrPublishToHome() {
+        if (!this.isOnline) {
+            this.showNotification('离线模式下无法发布内容', 'warning');
+            return;
+        }
+
+        const ta = document.getElementById('asrResultText');
+        const text = ta && typeof ta.value === 'string' ? ta.value.trim() : '';
+        if (!text) {
+            this.showNotification('识别结果为空，无法发布', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('asrPublishBtn');
+        if (btn) btn.disabled = true;
+        this.setAsrStatus('发布中...');
+
+        try {
+            const fd = new FormData();
+            fd.append('text', text);
+
+            const resp = await fetch(`${this.apiBase}/contents`, {
+                method: 'POST',
+                body: fd
+            });
+            const json = await resp.json().catch(() => null);
+            if (!resp.ok || !json || json.success !== true) {
+                const msg = json && json.message ? String(json.message) : '发布失败';
+                throw new Error(msg);
+            }
+
+            this.setAsrStatus('已发布到首页');
+            this.showNotification('已发布到首页', 'success');
+        } catch (err) {
+            const msg = err && err.message ? String(err.message) : '发布失败';
+            this.setAsrStatus(msg);
+            this.showNotification(msg, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
     
     // 历史页面事件监听器
@@ -415,6 +698,47 @@ class MediaShareApp {
                 this.updateSetting('cleanupPeriod', parseInt(e.target.value));
             });
         }
+
+        const uploadMaxSize = document.getElementById('uploadMaxSize');
+        const uploadMaxSizeHint = document.getElementById('uploadMaxSizeHint');
+        const saveUploadLimitBtn = document.getElementById('saveUploadLimitBtn');
+        if (uploadMaxSize) {
+            uploadMaxSize.addEventListener('change', (e) => {
+                const mb = parseInt(e.target.value);
+                if (!Number.isFinite(mb) || mb <= 0) return;
+                this.settings.uploadMaxSizeMB = mb;
+                this.saveSettings();
+                this.uploadLimitDirty = true;
+                if (uploadMaxSizeHint) uploadMaxSizeHint.textContent = '未保存';
+                if (saveUploadLimitBtn) saveUploadLimitBtn.disabled = false;
+            });
+        }
+        if (saveUploadLimitBtn) {
+            saveUploadLimitBtn.addEventListener('click', async () => {
+                const mb = Number.isFinite(Number(this.settings.uploadMaxSizeMB)) ? Number(this.settings.uploadMaxSizeMB) : NaN;
+                if (!Number.isFinite(mb) || mb <= 0) return;
+                saveUploadLimitBtn.disabled = true;
+                if (uploadMaxSizeHint) uploadMaxSizeHint.textContent = '保存中...';
+                try {
+                    const resp = await this.apiRequest('/settings/upload', {
+                        method: 'POST',
+                        body: JSON.stringify({ maxUploadSizeMB: mb })
+                    });
+                    const saved = resp && resp.data && Number.isFinite(Number(resp.data.maxUploadSizeMB)) ? Number(resp.data.maxUploadSizeMB) : mb;
+                    this.settings.uploadMaxSizeMB = Math.round(saved);
+                    this.saveSettings();
+                    this.uploadLimitDirty = false;
+                    if (uploadMaxSizeHint) uploadMaxSizeHint.textContent = '已保存';
+                    this.showNotification('上传大小限制已保存', 'success');
+                } catch (err) {
+                    this.uploadLimitDirty = true;
+                    if (uploadMaxSizeHint) uploadMaxSizeHint.textContent = '保存失败';
+                    saveUploadLimitBtn.disabled = false;
+                    const msg = err && err.message ? String(err.message) : '保存失败';
+                    this.showNotification(msg, 'error');
+                }
+            });
+        }
         
         const clearCacheBtn = document.getElementById('clearCacheBtn');
         if (clearCacheBtn) {
@@ -463,6 +787,7 @@ class MediaShareApp {
     
     // 初始化设置页面
     async initSettingsPage() {
+        await this.loadUploadLimitFromServer();
         this.loadSettingsUI();
         this.updateStorageInfo();
         this.syncCleanupSettings(); // 页面加载时同步一次
@@ -1064,6 +1389,15 @@ class MediaShareApp {
                             </a>
                         </div>
                     </div>
+                    <div class="flex items-center justify-between space-x-2 mb-2">
+                        <button onclick="window.app.extractAudioFromVideo('${content.id}', event)" class="flex-1 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 active:scale-95 transition-all shadow-md flex items-center justify-center space-x-1">
+                            ${this.svgIcon('music', 'w-4 h-4')}
+                            <span>提取音频</span>
+                        </button>
+                        <a href="${content.data}" download="${content.filename || 'video'}" class="p-2 bg-white rounded-lg shadow-md border border-blue-100 text-blue-600 hover:scale-105 active:scale-95 transition-all" title="下载视频">
+                            ${this.svgIcon('download', 'w-5 h-5')}
+                        </a>
+                    </div>
                     ${content.text ? `
                         <div class="flex items-start justify-between gap-2">
                             <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
@@ -1167,6 +1501,31 @@ class MediaShareApp {
             loadingToast.remove();
             console.error('转换失败:', error);
             this.showNotification('生成失败: ' + error.message, 'error');
+        }
+    }
+
+    async extractAudioFromVideo(id, event) {
+        if (event) event.stopPropagation();
+        
+        const loadingToast = this.showNotification('正在提取音频，请稍候...', 'loading');
+        
+        try {
+            const response = await this.apiRequest('/video/to-mp3', {
+                method: 'POST',
+                body: JSON.stringify({ id })
+            });
+            
+            loadingToast.remove();
+            
+            if (response.success) {
+                this.showNotification('音频提取成功！已加入列表', 'success');
+                await this.loadContents();
+                this.renderContents();
+            }
+        } catch (error) {
+            loadingToast.remove();
+            console.error('提取失败:', error);
+            this.showNotification('提取失败: ' + error.message, 'error');
         }
     }
 
@@ -1388,6 +1747,11 @@ class MediaShareApp {
         if (composerPlaceholder) composerPlaceholder.classList.add('hidden');
         
         files.forEach(file => {
+            const maxMB = Number.isFinite(Number(this.settings.uploadMaxSizeMB)) ? Number(this.settings.uploadMaxSizeMB) : 500;
+            if (file && Number.isFinite(maxMB) && maxMB > 0 && file.size > maxMB * 1024 * 1024) {
+                this.showNotification(`文件超过 ${maxMB}MB，已跳过`, 'warning');
+                return;
+            }
             // 将文件添加到待上传列表
             this.filesToUpload.push(file);
             const fileIndex = this.filesToUpload.length - 1;
@@ -2411,6 +2775,18 @@ class MediaShareApp {
             console.error('同步清理设置失败:', err);
         }
     }
+
+    async loadUploadLimitFromServer() {
+        try {
+            const resp = await this.apiRequest('/settings/upload', { method: 'GET' });
+            const mb = resp && resp.data && Number.isFinite(Number(resp.data.maxUploadSizeMB)) ? Number(resp.data.maxUploadSizeMB) : NaN;
+            if (Number.isFinite(mb) && mb > 0) {
+                this.settings.uploadMaxSizeMB = Math.round(mb);
+                this.saveSettings();
+                this.uploadLimitDirty = false;
+            }
+        } catch {}
+    }
     
     toggleDarkMode(enabled) {
         this.updateSetting('darkMode', enabled);
@@ -2443,6 +2819,15 @@ class MediaShareApp {
         if (cleanupPeriod) {
             cleanupPeriod.value = this.settings.cleanupPeriod;
         }
+
+        const uploadMaxSize = document.getElementById('uploadMaxSize');
+        if (uploadMaxSize) {
+            uploadMaxSize.value = this.settings.uploadMaxSizeMB;
+        }
+        const uploadMaxSizeHint = document.getElementById('uploadMaxSizeHint');
+        if (uploadMaxSizeHint) uploadMaxSizeHint.textContent = this.uploadLimitDirty ? '未保存' : '已保存';
+        const saveUploadLimitBtn = document.getElementById('saveUploadLimitBtn');
+        if (saveUploadLimitBtn) saveUploadLimitBtn.disabled = !this.uploadLimitDirty;
     }
     
     applySettings() {
@@ -2461,7 +2846,9 @@ class MediaShareApp {
             cleanupPeriod: 30,
             darkMode: false,
             soundEnabled: true,
-            vibrationEnabled: true
+            vibrationEnabled: true,
+            uploadMaxSizeMB: 500,
+            asrPublicBaseUrl: ''
         };
         return stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
     }
