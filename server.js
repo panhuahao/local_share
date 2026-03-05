@@ -368,6 +368,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const CONTENTS_FILE = path.join(DATA_DIR, 'contents.json');
 const DELETED_FILE = path.join(DATA_DIR, 'deleted.json');
 const TTS_VOICES_FILE = path.join(DATA_DIR, 'tts_voices.json');
+const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 
 // 读取数据文件
 async function readDataFile(filename, defaultValue = []) {
@@ -391,6 +392,52 @@ async function writeDataFile(filename, data) {
         console.error('写入文件失败:', error);
         throw error;
     }
+}
+
+async function createTask({ type, title, meta } = {}) {
+    const tasks = await readDataFile(TASKS_FILE, []);
+    const now = new Date().toISOString();
+    const task = {
+        id: uuidv4(),
+        type: typeof type === 'string' ? type : 'task',
+        title: typeof title === 'string' ? title : '',
+        status: 'running',
+        meta: meta && typeof meta === 'object' ? meta : {},
+        steps: [{ at: now, message: '任务已创建' }],
+        createdAt: now,
+        updatedAt: now
+    };
+    tasks.unshift(task);
+    await writeDataFile(TASKS_FILE, tasks);
+    return task;
+}
+
+async function appendTaskStep(taskId, message) {
+    if (!taskId) return null;
+    const tasks = await readDataFile(TASKS_FILE, []);
+    const idx = tasks.findIndex((t) => t && t.id === taskId);
+    if (idx < 0) return null;
+    const now = new Date().toISOString();
+    const msg = typeof message === 'string' ? message : '';
+    tasks[idx].steps = Array.isArray(tasks[idx].steps) ? tasks[idx].steps : [];
+    tasks[idx].steps.push({ at: now, message: msg });
+    tasks[idx].updatedAt = now;
+    await writeDataFile(TASKS_FILE, tasks);
+    return tasks[idx];
+}
+
+async function finishTask(taskId, { status, error, result } = {}) {
+    if (!taskId) return null;
+    const tasks = await readDataFile(TASKS_FILE, []);
+    const idx = tasks.findIndex((t) => t && t.id === taskId);
+    if (idx < 0) return null;
+    const now = new Date().toISOString();
+    tasks[idx].status = status === 'success' ? 'success' : status === 'error' ? 'error' : 'success';
+    tasks[idx].error = typeof error === 'string' ? error : '';
+    tasks[idx].result = result;
+    tasks[idx].updatedAt = now;
+    await writeDataFile(TASKS_FILE, tasks);
+    return tasks[idx];
 }
 
 async function migrateHeicImages() {
@@ -737,6 +784,33 @@ async function volcTtsV3ToBuffer({
     throw new Error('TTS 请求失败: unknown');
 }
 
+app.get('/api/tasks', async (req, res) => {
+    try {
+        const limitRaw = typeof req.query.limit === 'string' ? req.query.limit : '';
+        const limit = Math.max(1, Math.min(200, parseInt(limitRaw || '50', 10)));
+        const tasks = await readDataFile(TASKS_FILE, []);
+        const list = Array.isArray(tasks) ? tasks : [];
+        list.sort((a, b) => String(b && b.createdAt ? b.createdAt : '').localeCompare(String(a && a.createdAt ? a.createdAt : '')));
+        res.json({ success: true, data: list.slice(0, limit) });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '获取任务列表失败' });
+    }
+});
+
+app.get('/api/tasks/:id', async (req, res) => {
+    try {
+        const id = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+        if (!id) return res.status(400).json({ success: false, message: '缺少任务ID' });
+        const tasks = await readDataFile(TASKS_FILE, []);
+        const list = Array.isArray(tasks) ? tasks : [];
+        const task = list.find((t) => t && t.id === id);
+        if (!task) return res.status(404).json({ success: false, message: '任务不存在' });
+        res.json({ success: true, data: task });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '获取任务失败' });
+    }
+});
+
 // 获取所有内容
 app.get('/api/contents', async (req, res) => {
     try {
@@ -1076,6 +1150,949 @@ app.post('/api/video-parser/publish', async (req, res) => {
             return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB）` });
         }
         res.status(500).json({ success: false, message: '发布失败' });
+    }
+});
+
+app.post('/api/video-parser/tasks/publish', async (req, res) => {
+    const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+    const coverUrl = typeof (req.body && req.body.coverUrl) === 'string' ? req.body.coverUrl.trim() : '';
+    const title = typeof (req.body && req.body.title) === 'string' ? req.body.title.trim() : '';
+    const authorName = typeof (req.body && req.body.authorName) === 'string' ? req.body.authorName.trim() : '';
+    const sourceUrl = typeof (req.body && req.body.sourceUrl) === 'string' ? req.body.sourceUrl.trim() : '';
+
+    const task = await createTask({
+        type: 'video-parser.publish-video',
+        title: '发布视频到首页',
+        meta: { title, authorName, sourceUrl }
+    });
+
+    res.json({ success: true, message: '任务已创建', data: { taskId: task.id } });
+
+    (async () => {
+        let outputPath = '';
+        try {
+            await appendTaskStep(task.id, '校验参数');
+
+            const parsed = normalizeHttpUrl(videoUrl);
+            if (!parsed) throw new Error('无效的视频地址');
+            if (isPrivateOrLocalHost(parsed.hostname)) throw new Error('视频地址被拒绝');
+
+            const fileId = uuidv4();
+            const outputFilename = `${fileId}.mp4`;
+            outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+            await appendTaskStep(task.id, '下载视频中');
+
+            const upstream = await axios({
+                method: 'GET',
+                url: parsed.href,
+                responseType: 'stream',
+                timeout: 60000,
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                validateStatus: () => true
+            });
+
+            if (!upstream || upstream.status < 200 || upstream.status >= 300) throw new Error('下载视频失败');
+
+            const ct = upstream.headers && upstream.headers['content-type'] ? String(upstream.headers['content-type']) : '';
+            const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+            if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+                const limitMB = getMaxUploadSizeMB();
+                const sizeMB = Math.round(clRaw / 1024 / 1024);
+                throw new Error(`视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）`);
+            }
+
+            await new Promise((resolve, reject) => {
+                const ws = fsSync.createWriteStream(outputPath);
+                let downloaded = 0;
+
+                const onData = (chunk) => {
+                    downloaded += chunk ? chunk.length : 0;
+                    if (downloaded > getMaxUploadFileSizeBytes()) {
+                        cleanup();
+                        const err = new Error(`视频文件过大（上限 ${getMaxUploadSizeMB()}MB）`);
+                        err.code = 'FILE_TOO_LARGE';
+                        reject(err);
+                        try { upstream.data.destroy(); } catch {}
+                        try { ws.destroy(); } catch {}
+                        try { fsSync.unlinkSync(outputPath); } catch {}
+                    }
+                };
+
+                const cleanup = () => {
+                    try { upstream.data.off('data', onData); } catch {}
+                };
+
+                upstream.data.on('data', onData);
+                upstream.data.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('finish', () => {
+                    cleanup();
+                    resolve();
+                });
+                upstream.data.pipe(ws);
+            });
+
+            await appendTaskStep(task.id, '写入首页内容');
+
+            const stats = await fs.stat(outputPath);
+            const displayTitle = safeFilenameFromTitle(title, 'video');
+            const displayAuthor = authorName ? `@${authorName}` : '';
+            const displayTextParts = [];
+            if (displayTitle) displayTextParts.push(displayTitle);
+            if (displayAuthor) displayTextParts.push(displayAuthor);
+            if (sourceUrl) displayTextParts.push(sourceUrl);
+
+            const contents = await readDataFile(CONTENTS_FILE);
+            const newVideoContent = {
+                id: uuidv4(),
+                type: 'video',
+                text: displayTextParts.join('\n'),
+                data: `/uploads/${outputFilename}`,
+                filename: `${displayTitle || 'video'}.mp4`,
+                size: stats.size,
+                mimetype: ct && /^video\//i.test(ct) ? ct : 'video/mp4',
+                coverUrl: coverUrl || '',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            contents.unshift(newVideoContent);
+            await writeDataFile(CONTENTS_FILE, contents);
+
+            await appendTaskStep(task.id, '完成');
+            await finishTask(task.id, { status: 'success', result: { contentId: newVideoContent.id } });
+        } catch (err) {
+            const msg = err && err.message ? String(err.message) : '发布失败';
+            await appendTaskStep(task.id, '失败');
+            await finishTask(task.id, { status: 'error', error: msg });
+            if (outputPath) await fs.unlink(outputPath).catch(() => {});
+        }
+    })();
+});
+
+app.post('/api/video-parser/tasks/extract-audio', async (req, res) => {
+    const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+    const title = typeof (req.body && req.body.title) === 'string' ? req.body.title.trim() : '';
+    const authorName = typeof (req.body && req.body.authorName) === 'string' ? req.body.authorName.trim() : '';
+    const sourceUrl = typeof (req.body && req.body.sourceUrl) === 'string' ? req.body.sourceUrl.trim() : '';
+
+    const task = await createTask({
+        type: 'video-parser.extract-audio',
+        title: '提取音频到首页',
+        meta: { title, authorName, sourceUrl }
+    });
+
+    res.json({ success: true, message: '任务已创建', data: { taskId: task.id } });
+
+    (async () => {
+        let tempVideoPath = '';
+        try {
+            await appendTaskStep(task.id, '校验参数');
+            const parsed = normalizeHttpUrl(videoUrl);
+            if (!parsed) throw new Error('无效的视频地址');
+            if (isPrivateOrLocalHost(parsed.hostname)) throw new Error('视频地址被拒绝');
+
+            const fileId = uuidv4();
+            tempVideoPath = path.join(UPLOAD_DIR, `tmp-${fileId}.mp4`);
+
+            await appendTaskStep(task.id, '下载视频中');
+
+            const upstream = await axios({
+                method: 'GET',
+                url: parsed.href,
+                responseType: 'stream',
+                timeout: 60000,
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                validateStatus: () => true
+            });
+
+            if (!upstream || upstream.status < 200 || upstream.status >= 300) throw new Error('下载视频失败');
+
+            const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+            if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+                const limitMB = getMaxUploadSizeMB();
+                const sizeMB = Math.round(clRaw / 1024 / 1024);
+                throw new Error(`视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）`);
+            }
+
+            await new Promise((resolve, reject) => {
+                const ws = fsSync.createWriteStream(tempVideoPath);
+                let downloaded = 0;
+
+                const onData = (chunk) => {
+                    downloaded += chunk ? chunk.length : 0;
+                    if (downloaded > getMaxUploadFileSizeBytes()) {
+                        cleanup();
+                        const err = new Error(`视频文件过大（上限 ${getMaxUploadSizeMB()}MB）`);
+                        err.code = 'FILE_TOO_LARGE';
+                        reject(err);
+                        try { upstream.data.destroy(); } catch {}
+                        try { ws.destroy(); } catch {}
+                        try { fsSync.unlinkSync(tempVideoPath); } catch {}
+                    }
+                };
+
+                const cleanup = () => {
+                    try { upstream.data.off('data', onData); } catch {}
+                };
+
+                upstream.data.on('data', onData);
+                upstream.data.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('finish', () => {
+                    cleanup();
+                    resolve();
+                });
+                upstream.data.pipe(ws);
+            });
+
+            await appendTaskStep(task.id, '提取音频中');
+
+            const outputFilename = `${uuidv4()}.mp3`;
+            const outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+            try {
+                await execFileAsync('ffmpeg', [
+                    '-y',
+                    '-i', tempVideoPath,
+                    '-map', '0:a:0',
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', '16000',
+                    '-c:a', 'libmp3lame',
+                    '-b:a', '128k',
+                    outputPath
+                ]);
+            } catch (err) {
+                const code = err && err.code ? String(err.code) : '';
+                const stderr = err && err.stderr ? String(err.stderr) : '';
+                if (code === 'ENOENT') throw new Error('服务器未安装 ffmpeg');
+                if (/matches no streams|does not contain any stream/i.test(stderr)) throw new Error('视频没有可提取的音频轨');
+                throw new Error('音频提取失败');
+            } finally {
+                await fs.unlink(tempVideoPath).catch(() => {});
+                tempVideoPath = '';
+            }
+
+            await appendTaskStep(task.id, '发布音频到首页');
+
+            const stats = await fs.stat(outputPath);
+            const displayTitle = safeFilenameFromTitle(title, 'audio');
+            const displayAuthor = authorName ? `@${authorName}` : '';
+            const displayTextParts = [];
+            if (displayTitle) displayTextParts.push(displayTitle);
+            if (displayAuthor) displayTextParts.push(displayAuthor);
+            if (sourceUrl) displayTextParts.push(sourceUrl);
+
+            const contents = await readDataFile(CONTENTS_FILE);
+            const newAudioContent = {
+                id: uuidv4(),
+                type: 'audio',
+                text: displayTextParts.join('\n'),
+                data: `/uploads/${outputFilename}`,
+                filename: `${displayTitle || 'audio'}.mp3`,
+                size: stats.size,
+                mimetype: 'audio/mpeg',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            contents.unshift(newAudioContent);
+            await writeDataFile(CONTENTS_FILE, contents);
+
+            await appendTaskStep(task.id, '完成');
+            await finishTask(task.id, { status: 'success', result: { contentId: newAudioContent.id } });
+        } catch (err) {
+            const msg = err && err.message ? String(err.message) : '提取失败';
+            await appendTaskStep(task.id, '失败');
+            await finishTask(task.id, { status: 'error', error: msg });
+        } finally {
+            if (tempVideoPath) await fs.unlink(tempVideoPath).catch(() => {});
+        }
+    })();
+});
+
+app.post('/api/video-parser/tasks/asr-text', async (req, res) => {
+    const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+    const publicBaseUrl = typeof (req.body && req.body.publicBaseUrl) === 'string' ? req.body.publicBaseUrl.trim() : '';
+    const languageRaw = typeof (req.body && req.body.language) === 'string' ? req.body.language.trim() : '';
+
+    const task = await createTask({
+        type: 'video-parser.asr-text',
+        title: '发布文案到首页',
+        meta: { videoUrl }
+    });
+
+    res.json({ success: true, message: '任务已创建', data: { taskId: task.id } });
+
+    (async () => {
+        let tempVideoPath = '';
+        let tempAudioFilename = '';
+        try {
+            await appendTaskStep(task.id, '校验参数');
+
+            if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) throw new Error('未配置火山引擎鉴权信息');
+
+            const parsed = normalizeHttpUrl(videoUrl);
+            if (!parsed) throw new Error('无效的视频地址');
+            if (isPrivateOrLocalHost(parsed.hostname)) throw new Error('视频地址被拒绝');
+
+            const fileId = uuidv4();
+            tempVideoPath = path.join(UPLOAD_DIR, `tmp-${fileId}.mp4`);
+
+            await appendTaskStep(task.id, '下载视频中');
+
+            const upstream = await axios({
+                method: 'GET',
+                url: parsed.href,
+                responseType: 'stream',
+                timeout: 60000,
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                validateStatus: () => true
+            });
+
+            if (!upstream || upstream.status < 200 || upstream.status >= 300) throw new Error('下载视频失败');
+
+            const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+            if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+                const limitMB = getMaxUploadSizeMB();
+                const sizeMB = Math.round(clRaw / 1024 / 1024);
+                throw new Error(`视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）`);
+            }
+
+            await new Promise((resolve, reject) => {
+                const ws = fsSync.createWriteStream(tempVideoPath);
+                let downloaded = 0;
+
+                const onData = (chunk) => {
+                    downloaded += chunk ? chunk.length : 0;
+                    if (downloaded > getMaxUploadFileSizeBytes()) {
+                        cleanup();
+                        const err = new Error(`视频文件过大（上限 ${getMaxUploadSizeMB()}MB）`);
+                        err.code = 'FILE_TOO_LARGE';
+                        reject(err);
+                        try { upstream.data.destroy(); } catch {}
+                        try { ws.destroy(); } catch {}
+                        try { fsSync.unlinkSync(tempVideoPath); } catch {}
+                    }
+                };
+
+                const cleanup = () => {
+                    try { upstream.data.off('data', onData); } catch {}
+                };
+
+                upstream.data.on('data', onData);
+                upstream.data.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('error', (e) => {
+                    cleanup();
+                    reject(e);
+                });
+                ws.on('finish', () => {
+                    cleanup();
+                    resolve();
+                });
+                upstream.data.pipe(ws);
+            });
+
+            await appendTaskStep(task.id, '提取音频中');
+
+            tempAudioFilename = `tmp-${uuidv4()}.mp3`;
+            const tempAudioPath = path.join(UPLOAD_DIR, tempAudioFilename);
+
+            try {
+                await execFileAsync('ffmpeg', [
+                    '-y',
+                    '-i', tempVideoPath,
+                    '-map', '0:a:0',
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', '16000',
+                    '-c:a', 'libmp3lame',
+                    '-b:a', '128k',
+                    tempAudioPath
+                ]);
+            } catch (err) {
+                const code = err && err.code ? String(err.code) : '';
+                const stderr = err && err.stderr ? String(err.stderr) : '';
+                if (code === 'ENOENT') throw new Error('服务器未安装 ffmpeg');
+                if (/matches no streams|does not contain any stream/i.test(stderr)) throw new Error('视频没有可提取的音频轨');
+                throw new Error('音频提取失败');
+            } finally {
+                await fs.unlink(tempVideoPath).catch(() => {});
+                tempVideoPath = '';
+            }
+
+            const audioPathForUrl = `/uploads/${tempAudioFilename}`;
+            const audioPublicUrl = toPublicAudioUrlWithOverride(req, audioPathForUrl, publicBaseUrl);
+            if (!audioPublicUrl) throw new Error('无效的音频地址');
+
+            await appendTaskStep(task.id, '提交识别任务');
+
+            const taskId = uuidv4();
+            const submitUrl = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit';
+
+            const payload = {
+                user: { uid: 'media_share_platform' },
+                audio: { url: audioPublicUrl, format: 'mp3' },
+                request: { model_name: 'bigmodel', enable_itn: true, enable_punc: true }
+            };
+            if (languageRaw) payload.audio.language = languageRaw;
+
+            const candidates = buildAsrResourceIdCandidates();
+            let ok = false;
+
+            for (const resourceId of candidates) {
+                const response = await axios.post(submitUrl, payload, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-App-Key': VOLC_TTS_APP_ID,
+                        'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                        'X-Api-Resource-Id': resourceId,
+                        'X-Api-Request-Id': taskId,
+                        'X-Api-Sequence': '-1'
+                    },
+                    timeout: 60000,
+                    validateStatus: () => true
+                });
+
+                const h = response && response.headers ? response.headers : {};
+                const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+                const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+                const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+                if (statusCode === '20000000') {
+                    asrTaskResourceIdMap.set(taskId, resourceId);
+                    ok = true;
+                    break;
+                }
+
+                if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                const msg = apiMessage || '提交识别任务失败';
+                throw new Error(logid ? `${msg}（logid=${logid}）` : msg);
+            }
+
+            if (!ok) throw new Error('提交识别任务失败');
+
+            await appendTaskStep(task.id, '识别中');
+
+            const queryUrl = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/query';
+            const startedAt = Date.now();
+            const maxMs = 6 * 60 * 1000;
+            let lastProgressAt = 0;
+
+            while (true) {
+                if (Date.now() - startedAt > maxMs) throw new Error('识别超时，请稍后重试');
+                await new Promise((r) => setTimeout(r, 2000));
+
+                const resourceCandidates = (() => {
+                    const preferred = asrTaskResourceIdMap.get(taskId) || '';
+                    const list = buildAsrResourceIdCandidates();
+                    return Array.from(new Set([preferred, ...list].filter(Boolean)));
+                })();
+
+                let got = null;
+
+                for (const resourceId of resourceCandidates) {
+                    const response = await axios.post(queryUrl, {}, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Api-App-Key': VOLC_TTS_APP_ID,
+                            'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                            'X-Api-Resource-Id': resourceId,
+                            'X-Api-Request-Id': taskId,
+                            'X-Api-Sequence': '-1'
+                        },
+                        timeout: 60000,
+                        validateStatus: () => true
+                    });
+
+                    const h = response && response.headers ? response.headers : {};
+                    const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+                    const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+                    const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+                    if (response.status < 200 || response.status >= 300) {
+                        if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                        const msg = apiMessage || '查询失败';
+                        throw new Error(logid ? `${msg}（logid=${logid}）` : msg);
+                    }
+
+                    const body = response.data && typeof response.data === 'object' ? response.data : {};
+                    const text = body && body.result && typeof body.result.text === 'string' ? body.result.text : '';
+
+                    if (statusCode === '20000000') {
+                        asrTaskResourceIdMap.set(taskId, resourceId);
+                        got = { done: true, text };
+                        break;
+                    }
+
+                    if (statusCode === '20000001' || statusCode === '20000002') {
+                        asrTaskResourceIdMap.set(taskId, resourceId);
+                        got = { done: false };
+                        break;
+                    }
+
+                    if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                    const msg = apiMessage || (statusCode === '20000003' ? '静音音频' : '识别失败');
+                    throw new Error(logid ? `${msg}（logid=${logid}）` : msg);
+                }
+
+                if (!got) continue;
+                if (!got.done) {
+                    if (Date.now() - lastProgressAt > 8000) {
+                        lastProgressAt = Date.now();
+                        await appendTaskStep(task.id, '识别中');
+                    }
+                    continue;
+                }
+
+                const finalText = typeof got.text === 'string' ? got.text.trim() : '';
+                if (!finalText) throw new Error('识别结果为空');
+
+                await appendTaskStep(task.id, '发布文字到首页');
+
+                const contents = await readDataFile(CONTENTS_FILE);
+                const textContent = {
+                    id: uuidv4(),
+                    type: 'text',
+                    text: finalText,
+                    data: null,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                contents.unshift(textContent);
+                await writeDataFile(CONTENTS_FILE, contents);
+
+                await appendTaskStep(task.id, '清理临时文件');
+                await fs.unlink(path.join(UPLOAD_DIR, tempAudioFilename)).catch(() => {});
+                tempAudioFilename = '';
+
+                await appendTaskStep(task.id, '完成');
+                await finishTask(task.id, { status: 'success', result: { contentId: textContent.id } });
+                break;
+            }
+        } catch (err) {
+            const msg = err && err.message ? String(err.message) : '识别失败';
+            await appendTaskStep(task.id, '失败');
+            await finishTask(task.id, { status: 'error', error: msg });
+        } finally {
+            if (tempVideoPath) await fs.unlink(tempVideoPath).catch(() => {});
+            if (tempAudioFilename) await fs.unlink(path.join(UPLOAD_DIR, tempAudioFilename)).catch(() => {});
+        }
+    })();
+});
+
+app.post('/api/video-parser/extract-audio', async (req, res) => {
+    let tempVideoPath = '';
+    try {
+        const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+        const title = typeof (req.body && req.body.title) === 'string' ? req.body.title.trim() : '';
+        const authorName = typeof (req.body && req.body.authorName) === 'string' ? req.body.authorName.trim() : '';
+        const sourceUrl = typeof (req.body && req.body.sourceUrl) === 'string' ? req.body.sourceUrl.trim() : '';
+
+        const parsed = normalizeHttpUrl(videoUrl);
+        if (!parsed) return res.status(400).json({ success: false, message: '无效的视频地址' });
+        if (isPrivateOrLocalHost(parsed.hostname)) return res.status(400).json({ success: false, message: '视频地址被拒绝' });
+
+        const fileId = uuidv4();
+        const tempVideoFilename = `tmp-${fileId}.mp4`;
+        tempVideoPath = path.join(UPLOAD_DIR, tempVideoFilename);
+
+        const upstream = await axios({
+            method: 'GET',
+            url: parsed.href,
+            responseType: 'stream',
+            timeout: 60000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            validateStatus: () => true
+        });
+
+        if (!upstream || upstream.status < 200 || upstream.status >= 300) {
+            return res.status(502).json({ success: false, message: '下载视频失败' });
+        }
+
+        const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+        if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+            const limitMB = getMaxUploadSizeMB();
+            const sizeMB = Math.round(clRaw / 1024 / 1024);
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）` });
+        }
+
+        await new Promise((resolve, reject) => {
+            const ws = fsSync.createWriteStream(tempVideoPath);
+            let downloaded = 0;
+
+            const onData = (chunk) => {
+                downloaded += chunk ? chunk.length : 0;
+                if (downloaded > getMaxUploadFileSizeBytes()) {
+                    cleanup();
+                    const err = new Error('FILE_TOO_LARGE');
+                    err.code = 'FILE_TOO_LARGE';
+                    reject(err);
+                    try { upstream.data.destroy(); } catch {}
+                    try { ws.destroy(); } catch {}
+                    try { fsSync.unlinkSync(tempVideoPath); } catch {}
+                }
+            };
+
+            const cleanup = () => {
+                try { upstream.data.off('data', onData); } catch {}
+            };
+
+            upstream.data.on('data', onData);
+            upstream.data.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('finish', () => {
+                cleanup();
+                resolve();
+            });
+            upstream.data.pipe(ws);
+        });
+
+        const outputFilename = `${uuidv4()}.mp3`;
+        const outputPath = path.join(UPLOAD_DIR, outputFilename);
+
+        try {
+            await execFileAsync('ffmpeg', [
+                '-y',
+                '-i', tempVideoPath,
+                '-map', '0:a:0',
+                '-vn',
+                '-ac', '1',
+                '-ar', '16000',
+                '-c:a', 'libmp3lame',
+                '-b:a', '128k',
+                outputPath
+            ]);
+        } catch (err) {
+            const code = err && err.code ? String(err.code) : '';
+            const stderr = err && err.stderr ? String(err.stderr) : '';
+            if (code === 'ENOENT') return res.status(500).json({ success: false, message: '服务器未安装 ffmpeg' });
+            if (/matches no streams|does not contain any stream/i.test(stderr)) return res.status(400).json({ success: false, message: '视频没有可提取的音频轨' });
+            return res.status(500).json({ success: false, message: '音频提取失败' });
+        } finally {
+            await fs.unlink(tempVideoPath).catch(() => {});
+            tempVideoPath = '';
+        }
+
+        const stats = await fs.stat(outputPath);
+        const displayTitle = safeFilenameFromTitle(title, 'audio');
+        const displayAuthor = authorName ? `@${authorName}` : '';
+        const displayTextParts = [];
+        if (displayTitle) displayTextParts.push(displayTitle);
+        if (displayAuthor) displayTextParts.push(displayAuthor);
+        if (sourceUrl) displayTextParts.push(sourceUrl);
+
+        const contents = await readDataFile(CONTENTS_FILE);
+        const newAudioContent = {
+            id: uuidv4(),
+            type: 'audio',
+            text: `[视频提取音频] ${displayTextParts.join('\n')}`.trim(),
+            data: `/uploads/${outputFilename}`,
+            filename: `${displayTitle || 'audio'}.mp3`,
+            size: stats.size,
+            mimetype: 'audio/mpeg',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        contents.unshift(newAudioContent);
+        await writeDataFile(CONTENTS_FILE, contents);
+
+        res.json({ success: true, message: '音频已发布到首页', data: newAudioContent });
+    } catch (error) {
+        const code = error && (error.code || error.message) ? String(error.code || error.message) : '';
+        if (code === 'FILE_TOO_LARGE') {
+            const limitMB = getMaxUploadSizeMB();
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB）` });
+        }
+        res.status(500).json({ success: false, message: '提取失败' });
+    } finally {
+        if (tempVideoPath) {
+            await fs.unlink(tempVideoPath).catch(() => {});
+        }
+    }
+});
+
+app.post('/api/video-parser/asr-text', async (req, res) => {
+    let tempVideoPath = '';
+    let tempAudioPath = '';
+    try {
+        if (!VOLC_TTS_APP_ID || !VOLC_TTS_ACCESS_TOKEN) {
+            return res.status(500).json({ success: false, message: '未配置火山引擎鉴权信息' });
+        }
+
+        const videoUrl = typeof (req.body && req.body.videoUrl) === 'string' ? req.body.videoUrl.trim() : '';
+        const publicBaseUrl = typeof (req.body && req.body.publicBaseUrl) === 'string' ? req.body.publicBaseUrl.trim() : '';
+        const languageRaw = typeof (req.body && req.body.language) === 'string' ? req.body.language.trim() : '';
+
+        const parsed = normalizeHttpUrl(videoUrl);
+        if (!parsed) return res.status(400).json({ success: false, message: '无效的视频地址' });
+        if (isPrivateOrLocalHost(parsed.hostname)) return res.status(400).json({ success: false, message: '视频地址被拒绝' });
+
+        const fileId = uuidv4();
+        const tempVideoFilename = `tmp-${fileId}.mp4`;
+        tempVideoPath = path.join(UPLOAD_DIR, tempVideoFilename);
+
+        const upstream = await axios({
+            method: 'GET',
+            url: parsed.href,
+            responseType: 'stream',
+            timeout: 60000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            validateStatus: () => true
+        });
+
+        if (!upstream || upstream.status < 200 || upstream.status >= 300) {
+            return res.status(502).json({ success: false, message: '下载视频失败' });
+        }
+
+        const clRaw = upstream.headers && upstream.headers['content-length'] ? Number(upstream.headers['content-length']) : NaN;
+        if (Number.isFinite(clRaw) && clRaw > getMaxUploadFileSizeBytes()) {
+            const limitMB = getMaxUploadSizeMB();
+            const sizeMB = Math.round(clRaw / 1024 / 1024);
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB，大小 ${sizeMB}MB）` });
+        }
+
+        await new Promise((resolve, reject) => {
+            const ws = fsSync.createWriteStream(tempVideoPath);
+            let downloaded = 0;
+
+            const onData = (chunk) => {
+                downloaded += chunk ? chunk.length : 0;
+                if (downloaded > getMaxUploadFileSizeBytes()) {
+                    cleanup();
+                    const err = new Error('FILE_TOO_LARGE');
+                    err.code = 'FILE_TOO_LARGE';
+                    reject(err);
+                    try { upstream.data.destroy(); } catch {}
+                    try { ws.destroy(); } catch {}
+                    try { fsSync.unlinkSync(tempVideoPath); } catch {}
+                }
+            };
+
+            const cleanup = () => {
+                try { upstream.data.off('data', onData); } catch {}
+            };
+
+            upstream.data.on('data', onData);
+            upstream.data.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('error', (e) => {
+                cleanup();
+                reject(e);
+            });
+            ws.on('finish', () => {
+                cleanup();
+                resolve();
+            });
+            upstream.data.pipe(ws);
+        });
+
+        const tempAudioFilename = `tmp-${uuidv4()}.mp3`;
+        tempAudioPath = path.join(UPLOAD_DIR, tempAudioFilename);
+
+        try {
+            await execFileAsync('ffmpeg', [
+                '-y',
+                '-i', tempVideoPath,
+                '-map', '0:a:0',
+                '-vn',
+                '-ac', '1',
+                '-ar', '16000',
+                '-c:a', 'libmp3lame',
+                '-b:a', '128k',
+                tempAudioPath
+            ]);
+        } catch (err) {
+            const code = err && err.code ? String(err.code) : '';
+            const stderr = err && err.stderr ? String(err.stderr) : '';
+            if (code === 'ENOENT') return res.status(500).json({ success: false, message: '服务器未安装 ffmpeg' });
+            if (/matches no streams|does not contain any stream/i.test(stderr)) return res.status(400).json({ success: false, message: '视频没有可提取的音频轨' });
+            return res.status(500).json({ success: false, message: '音频提取失败' });
+        } finally {
+            await fs.unlink(tempVideoPath).catch(() => {});
+            tempVideoPath = '';
+        }
+
+        const audioPathForUrl = `/uploads/${tempAudioFilename}`;
+        const audioPublicUrl = toPublicAudioUrlWithOverride(req, audioPathForUrl, publicBaseUrl);
+        if (!audioPublicUrl) {
+            return res.status(400).json({ success: false, message: '无效的音频地址' });
+        }
+
+        const taskId = uuidv4();
+        const submitUrl = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit';
+
+        const payload = {
+            user: { uid: 'media_share_platform' },
+            audio: { url: audioPublicUrl, format: 'mp3' },
+            request: { model_name: 'bigmodel', enable_itn: true, enable_punc: true }
+        };
+        if (languageRaw) payload.audio.language = languageRaw;
+
+        const candidates = buildAsrResourceIdCandidates();
+        let submitLast = { statusCode: '', apiMessage: '', logid: '', resourceId: '' };
+
+        for (const resourceId of candidates) {
+            const response = await axios.post(submitUrl, payload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Api-App-Key': VOLC_TTS_APP_ID,
+                    'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                    'X-Api-Resource-Id': resourceId,
+                    'X-Api-Request-Id': taskId,
+                    'X-Api-Sequence': '-1'
+                },
+                timeout: 60000,
+                validateStatus: () => true
+            });
+
+            const h = response && response.headers ? response.headers : {};
+            const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+            const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+            const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+            if (statusCode === '20000000') {
+                asrTaskResourceIdMap.set(taskId, resourceId);
+                submitLast = { statusCode, apiMessage, logid, resourceId };
+                break;
+            }
+
+            submitLast = { statusCode, apiMessage, logid, resourceId };
+            if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+            const msg = apiMessage || '提交识别任务失败';
+            return res.status(502).json({ success: false, message: logid ? `${msg}（logid=${logid}）` : msg });
+        }
+
+        if (submitLast.statusCode !== '20000000') {
+            const msg = submitLast.apiMessage || '提交识别任务失败';
+            return res.status(502).json({ success: false, message: submitLast.logid ? `${msg}（logid=${submitLast.logid}）` : msg });
+        }
+
+        const queryUrl = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/query';
+        const startedAt = Date.now();
+        const maxMs = 6 * 60 * 1000;
+
+        while (true) {
+            if (Date.now() - startedAt > maxMs) {
+                return res.status(504).json({ success: false, message: '识别超时，请稍后重试' });
+            }
+
+            await new Promise((r) => setTimeout(r, 2000));
+
+            const resourceCandidates = (() => {
+                const preferred = asrTaskResourceIdMap.get(taskId) || '';
+                const list = buildAsrResourceIdCandidates();
+                return Array.from(new Set([preferred, ...list].filter(Boolean)));
+            })();
+
+            let got = null;
+
+            for (const resourceId of resourceCandidates) {
+                const response = await axios.post(queryUrl, {}, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-App-Key': VOLC_TTS_APP_ID,
+                        'X-Api-Access-Key': VOLC_TTS_ACCESS_TOKEN,
+                        'X-Api-Resource-Id': resourceId,
+                        'X-Api-Request-Id': taskId,
+                        'X-Api-Sequence': '-1'
+                    },
+                    timeout: 60000,
+                    validateStatus: () => true
+                });
+
+                const h = response && response.headers ? response.headers : {};
+                const statusCode = String(h['x-api-status-code'] || h['X-Api-Status-Code'] || '');
+                const apiMessage = String(h['x-api-message'] || h['X-Api-Message'] || '');
+                const logid = String(h['x-tt-logid'] || h['X-Tt-Logid'] || '');
+
+                if (response.status < 200 || response.status >= 300) {
+                    if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                    const msg = apiMessage || '查询失败';
+                    return res.status(502).json({ success: false, message: logid ? `${msg}（logid=${logid}）` : msg });
+                }
+
+                const body = response.data && typeof response.data === 'object' ? response.data : {};
+                const text = body && body.result && typeof body.result.text === 'string' ? body.result.text : '';
+
+                if (statusCode === '20000000') {
+                    asrTaskResourceIdMap.set(taskId, resourceId);
+                    got = { done: true, text };
+                    break;
+                }
+
+                if (statusCode === '20000001' || statusCode === '20000002') {
+                    asrTaskResourceIdMap.set(taskId, resourceId);
+                    got = { done: false };
+                    break;
+                }
+
+                if (isAsrResourceNotGrantedMessage(apiMessage)) continue;
+                const msg = apiMessage || (statusCode === '20000003' ? '静音音频' : '识别失败');
+                return res.json({ success: false, message: logid ? `${msg}（logid=${logid}）` : msg });
+            }
+
+            if (!got) continue;
+            if (!got.done) continue;
+
+            const finalText = typeof got.text === 'string' ? got.text.trim() : '';
+            if (!finalText) return res.status(500).json({ success: false, message: '识别结果为空' });
+
+            const contents = await readDataFile(CONTENTS_FILE);
+            const textContent = {
+                id: uuidv4(),
+                type: 'text',
+                text: finalText,
+                data: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+            contents.unshift(textContent);
+            await writeDataFile(CONTENTS_FILE, contents);
+
+            return res.json({ success: true, message: '文案已发布到首页', data: textContent });
+        }
+    } catch (error) {
+        const code = error && (error.code || error.message) ? String(error.code || error.message) : '';
+        if (code === 'FILE_TOO_LARGE') {
+            const limitMB = getMaxUploadSizeMB();
+            return res.status(413).json({ success: false, message: `视频文件过大（上限 ${limitMB}MB）` });
+        }
+        res.status(500).json({ success: false, message: '识别失败' });
+    } finally {
+        if (tempVideoPath) await fs.unlink(tempVideoPath).catch(() => {});
+        if (tempAudioPath) await fs.unlink(tempAudioPath).catch(() => {});
     }
 });
 

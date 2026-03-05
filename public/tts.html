@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 语音合成</title>
     <link rel="stylesheet" href="/tailwind.css?v=2.1.5">
-    <link rel="stylesheet" href="/theme.css?v=2.1.5">
+    <link rel="stylesheet" href="/theme.css?v=2.2.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -16,6 +16,17 @@
         .nav-item { transition: all 0.3s ease; }
         .nav-item.active { color: #2563eb; }
         .content-wrapper { padding-bottom: 96px; }
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
     </style>
 </head>
 <body>
@@ -46,12 +57,12 @@
 
                 <div class="mt-4 space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
+                        <div class="md:col-span-2">
                             <label class="block text-sm font-medium text-gray-700 mb-1">选择 speaker_id</label>
                             <select id="vcSpeakerSelect" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"></select>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">speaker_id</label>
+                        <div style="display:none">
+                            <label class="sr-only" style="display:none">speaker_id</label>
                             <input id="vcSpeakerId" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="S_7JA7WNiQ1" />
                         </div>
                     </div>
@@ -75,14 +86,14 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3" style="display:none">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">校验文本（可选）</label>
-                            <input id="vcReadText" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="与你录制内容一致，差异过大可能失败" />
+                            <label class="sr-only" style="display:none">校验文本（可选）</label>
+                            <input id="vcReadText" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="校验文本（可选）：与你录制内容一致，差异过大可能失败" />
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">试听文本（可选）</label>
-                            <input id="vcDemoText" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="4~80 字" />
+                            <label class="sr-only" style="display:none">试听文本（可选）</label>
+                            <input id="vcDemoText" class="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="试听文本（可选）：4~80 字" />
                         </div>
                     </div>
 
@@ -102,7 +113,7 @@
                             </div>
                         </div>
                         <div class="flex items-center gap-2">
-                            <input id="vcAudioFile" type="file" accept="audio/*" class="flex-1 text-sm text-gray-700" />
+                            <input id="vcAudioFile" type="file" accept="audio/*" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 bg-white focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
                             <button id="refreshTTSVoicesBtn" type="button" class="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all">刷新</button>
                         </div>
                     </div>
@@ -115,17 +126,25 @@
                         </div>
                     </div>
 
-                    <div class="pt-3 border-t border-gray-200">
-                        <div class="flex items-center justify-between gap-2">
-                            <div class="text-sm font-semibold text-gray-800">可用 speaker_id（支持改名）</div>
-                            <div class="flex items-center gap-2">
+                    <details class="pt-3 border-t border-gray-200">
+                        <summary class="cursor-pointer select-none text-sm font-semibold text-gray-800">音色管理（查看/改名）</summary>
+                        <div class="mt-3 space-y-3">
+                            <div class="text-xs text-gray-400">名称仅用于本应用展示，不会修改火山控制台信息</div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <div id="ttsSelectedVoiceId" class="text-xs text-gray-500"></div>
+                                <input id="ttsSelectedVoiceName" class="flex-1 min-w-[200px] p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="给当前 speaker_id 起个名字（可选）" />
+                                <button id="ttsSaveSelectedVoiceNameBtn" type="button" class="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all">保存名称</button>
+                            </div>
+
+                            <div id="ttsCustomVoicesList" class="space-y-2"></div>
+
+                            <div class="flex items-center gap-2 flex-wrap">
                                 <input id="ttsNewVoiceId" class="w-44 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="S_..." />
                                 <input id="ttsNewVoiceName" class="w-40 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="名称" />
                                 <button id="addTTSVoiceBtn" type="button" class="px-3 py-2 bg-white border border-purple-200 text-purple-700 rounded-lg text-sm font-bold hover:bg-purple-50 active:scale-95 transition-all">添加</button>
                             </div>
                         </div>
-                        <div id="ttsCustomVoicesList" class="mt-3 space-y-2"></div>
-                    </div>
+                    </details>
                 </div>
             </section>
 
@@ -300,6 +319,6 @@
         </div>
     </nav>
 
-    <script src="/main.js?v=2.2.2"></script>
+    <script src="/main.js?v=2.2.4"></script>
 </body>
 </html>

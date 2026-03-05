@@ -18,11 +18,16 @@ class MediaShareApp {
         this.voiceClonePollingSpeakerId = '';
         this.voiceClonePollingModelType = 4;
         this.voiceCloneAllowedSpeakerIds = [];
+        this.voiceCloneSpeakers = [];
+        this.voiceCloneSelectedSpeakerId = '';
         this.voiceCloneIsRecording = false;
         this.voiceCloneRecordedBase64 = '';
         this.voiceCloneRecordedBlobUrl = '';
         this.voiceCloneRecordingState = null;
         this.uploadLimitDirty = false;
+        this.tasks = [];
+        this.tasksPollTimer = null;
+        this.openTaskIds = new Set();
         
         this.init();
     }
@@ -37,6 +42,8 @@ class MediaShareApp {
             await this.initIndexPage();
         } else if (this.currentPage === 'tts') {
             await this.initTtsPage();
+        } else if (this.currentPage === 'parse') {
+            await this.initParsePage();
         } else if (this.currentPage === 'history') {
             await this.initHistoryPage();
         } else if (this.currentPage === 'settings') {
@@ -48,6 +55,7 @@ class MediaShareApp {
     getCurrentPage() {
         const path = window.location.pathname;
         if (path.includes('tts.html')) return 'tts';
+        if (path.includes('parse.html')) return 'parse';
         if (path.includes('history.html')) return 'history';
         if (path.includes('settings.html')) return 'settings';
         return 'index';
@@ -308,7 +316,19 @@ class MediaShareApp {
                 if (!input) return;
                 const value = e && e.target ? String(e.target.value || '').trim() : '';
                 if (value) input.value = value;
+                this.updateVoiceCloneSelectedNameUI();
             });
+        }
+
+        const vcSpeakerIdInput = document.getElementById('vcSpeakerId');
+        if (vcSpeakerIdInput) {
+            vcSpeakerIdInput.addEventListener('change', () => this.updateVoiceCloneSelectedNameUI());
+            vcSpeakerIdInput.addEventListener('blur', () => this.updateVoiceCloneSelectedNameUI());
+        }
+
+        const ttsSaveSelectedVoiceNameBtn = document.getElementById('ttsSaveSelectedVoiceNameBtn');
+        if (ttsSaveSelectedVoiceNameBtn) {
+            ttsSaveSelectedVoiceNameBtn.addEventListener('click', () => this.saveSelectedVoiceCloneName());
         }
 
         const vcRecordBtn = document.getElementById('vcRecordBtn');
@@ -364,6 +384,7 @@ class MediaShareApp {
         }
         await this.refreshTtsVoices({ silent: true });
         await this.fillVoiceCloneSpeakerId({ force: false });
+        this.updateVoiceCloneSelectedNameUI();
         this.initAsrPublicBaseUrlUI();
         await this.loadAsrUploadedAudios({ silent: true });
     }
@@ -666,6 +687,14 @@ class MediaShareApp {
         if (confirmDeletePermanentBtn) {
             confirmDeletePermanentBtn.addEventListener('click', () => this.batchDeletePermanent());
         }
+
+        const refreshTasksBtn = document.getElementById('refreshTasksBtn');
+        if (refreshTasksBtn) {
+            refreshTasksBtn.addEventListener('click', async () => {
+                await this.refreshTasks({ silent: false });
+                this.renderTasks();
+            });
+        }
     }
     
     // 设置页面事件监听器
@@ -783,7 +812,12 @@ class MediaShareApp {
         await this.loadDeletedContents();
         this.renderDeletedContents();
         this.updateStatistics();
+        await this.refreshTasks({ silent: true });
+        this.renderTasks();
+        this.startTasksPolling();
     }
+
+    async initParsePage() {}
     
     // 初始化设置页面
     async initSettingsPage() {
@@ -856,6 +890,117 @@ class MediaShareApp {
         } finally {
             this.showLoading(false);
         }
+    }
+
+    async refreshTasks({ silent } = {}) {
+        try {
+            const response = await this.apiRequest('/tasks?limit=50', { method: 'GET' });
+            this.tasks = Array.isArray(response && response.data) ? response.data : [];
+        } catch (error) {
+            this.tasks = [];
+            if (!silent) this.showNotification('加载任务列表失败: ' + error.message, 'error');
+        }
+    }
+
+    renderTasks() {
+        if (this.currentPage !== 'history') return;
+        const container = document.getElementById('tasksList');
+        if (!container) return;
+
+        const existingOpen = Array.from(container.querySelectorAll('details[open][data-task-id]'))
+            .map((d) => d && d.dataset ? String(d.dataset.taskId || '').trim() : '')
+            .filter(Boolean);
+        this.openTaskIds = new Set(existingOpen);
+
+        const tasks = Array.isArray(this.tasks) ? this.tasks : [];
+        if (tasks.length === 0) {
+            container.innerHTML = `<div class="text-xs text-gray-500">暂无任务记录</div>`;
+            return;
+        }
+
+        const badge = (status) => {
+            if (status === 'success') return `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-700">成功</span>`;
+            if (status === 'error') return `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">失败</span>`;
+            return `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700">进行中</span>`;
+        };
+
+        container.innerHTML = tasks.map((t) => {
+            const taskId = t && typeof t.id === 'string' ? t.id : '';
+            const title = t && typeof t.title === 'string' && t.title.trim() ? t.title.trim() : (t && typeof t.type === 'string' ? t.type : '任务');
+            const type = t && typeof t.type === 'string' ? t.type : '';
+            const createdAt = t && typeof t.createdAt === 'string' ? t.createdAt : '';
+            const updatedAt = t && typeof t.updatedAt === 'string' ? t.updatedAt : '';
+            const meta = t && t.meta && typeof t.meta === 'object' ? t.meta : {};
+            const steps = Array.isArray(t && t.steps) ? t.steps : [];
+            const last = steps.length ? steps[steps.length - 1] : null;
+            const lastMsg = last && typeof last.message === 'string' ? last.message : '';
+            const status = t && typeof t.status === 'string' ? t.status : 'running';
+            const error = t && typeof t.error === 'string' ? t.error : '';
+
+            const stepHtml = steps.slice(-10).map((s) => {
+                const m = s && typeof s.message === 'string' ? s.message : '';
+                const at = s && typeof s.at === 'string' ? s.at : '';
+                const rel = at ? this.getTimeAgo(at) : '';
+                const abs = at ? this.formatDateTime(at) : '';
+                const time = abs && rel ? `${abs}（${rel}）` : (abs || rel);
+                return `<div class="text-xs text-gray-600 flex items-center justify-between gap-3"><span class="truncate">${this.escapeHtml(m)}</span><span class="text-gray-400 flex-shrink-0">${this.escapeHtml(time)}</span></div>`;
+            }).join('');
+
+            const shortId = taskId ? taskId.slice(0, 8) : '';
+            const metaPairs = [
+                meta && typeof meta.title === 'string' && meta.title.trim() ? ['标题', meta.title.trim()] : null,
+                meta && typeof meta.authorName === 'string' && meta.authorName.trim() ? ['作者', meta.authorName.trim()] : null,
+                meta && typeof meta.sourceUrl === 'string' && meta.sourceUrl.trim() ? ['来源', meta.sourceUrl.trim()] : null,
+                meta && typeof meta.videoUrl === 'string' && meta.videoUrl.trim() ? ['视频', meta.videoUrl.trim()] : null
+            ].filter(Boolean);
+            const metaHtml = metaPairs.length
+                ? metaPairs.map(([k, v]) => `<div class="text-xs text-gray-600 flex items-center gap-2"><span class="text-gray-400 flex-shrink-0">${this.escapeHtml(k)}:</span><span class="truncate">${this.escapeHtml(v)}</span></div>`).join('')
+                : `<div class="text-xs text-gray-500">无额外信息</div>`;
+
+            return `
+                <details class="bg-white rounded-xl border border-gray-200 px-4 py-3" data-task-id="${this.escapeHtml(taskId)}" ${this.openTaskIds.has(taskId) ? 'open' : ''}>
+                    <summary class="cursor-pointer select-none flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-bold text-gray-900 truncate">${this.escapeHtml(title)}</div>
+                            <div class="text-xs text-gray-500 truncate">${this.escapeHtml(createdAt ? this.formatDateTime(createdAt) : '')}${createdAt ? ' · ' + this.escapeHtml(this.getTimeAgo(createdAt)) : ''}${lastMsg ? ' · ' + this.escapeHtml(lastMsg) : ''}</div>
+                        </div>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            ${badge(status)}
+                        </div>
+                    </summary>
+                    <div class="mt-3 space-y-2">
+                        <div class="text-xs text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                            ${shortId ? `<span>ID: ${this.escapeHtml(shortId)}</span>` : ''}
+                            ${type ? `<span>类型: ${this.escapeHtml(type)}</span>` : ''}
+                            ${updatedAt ? `<span>更新: ${this.escapeHtml(this.formatDateTime(updatedAt))}（${this.escapeHtml(this.getTimeAgo(updatedAt))}）</span>` : ''}
+                        </div>
+                        <div class="bg-gray-50 rounded-lg px-3 py-2 space-y-1">
+                            ${metaHtml}
+                        </div>
+                        ${error ? `<div class="text-xs text-red-600">${this.escapeHtml(error)}</div>` : ''}
+                        ${stepHtml || `<div class="text-xs text-gray-500">暂无步骤</div>`}
+                    </div>
+                </details>
+            `;
+        }).join('');
+
+        Array.from(container.querySelectorAll('details[data-task-id]')).forEach((d) => {
+            d.addEventListener('toggle', () => {
+                const id = d && d.dataset ? String(d.dataset.taskId || '').trim() : '';
+                if (!id) return;
+                if (d.open) this.openTaskIds.add(id);
+                else this.openTaskIds.delete(id);
+            });
+        });
+    }
+
+    startTasksPolling() {
+        if (this.tasksPollTimer) clearInterval(this.tasksPollTimer);
+        if (this.currentPage !== 'history') return;
+        this.tasksPollTimer = setInterval(async () => {
+            await this.refreshTasks({ silent: true });
+            this.renderTasks();
+        }, 4000);
     }
     
     // 显示/隐藏加载状态
@@ -1660,6 +1805,19 @@ class MediaShareApp {
         if (days < 7) return `${days}天前`;
         return date.toLocaleDateString();
     }
+
+    formatDateTime(dateString) {
+        const d = new Date(dateString);
+        if (Number.isNaN(d.getTime())) return '';
+        const pad = (n) => String(n).padStart(2, '0');
+        const y = d.getFullYear();
+        const m = pad(d.getMonth() + 1);
+        const day = pad(d.getDate());
+        const hh = pad(d.getHours());
+        const mm = pad(d.getMinutes());
+        const ss = pad(d.getSeconds());
+        return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+    }
     
     getFilteredContents() {
         let filtered = [...this.contents];
@@ -2017,11 +2175,13 @@ class MediaShareApp {
                 const record = customMap.get(id);
                 return { id, name: record && record.name ? record.name : '', group: record && record.group ? record.group : '' };
             });
+            this.voiceCloneSpeakers = voiceCloneSpeakers;
 
             this.renderTtsVoiceSelect(builtin, custom);
             this.renderCustomTtsVoices(voiceCloneSpeakers);
             this.renderVoiceCloneSpeakerSelect(voiceCloneSpeakers);
             this.setVoiceCloneSpeakerIdLockedMode(allowed.length > 0);
+            this.updateVoiceCloneSelectedNameUI();
             if (status) status.textContent = `已加载 ${builtin.length + custom.length} 个`;
         } catch (e) {
             if (status) status.textContent = '';
@@ -2076,22 +2236,85 @@ class MediaShareApp {
 
         container.innerHTML = custom.map((v) => {
             const label = v.name ? `${v.name}` : v.id;
-            const inputId = `ttsVoiceName_${v.id}`;
             return `
-                <div class="bg-white rounded-lg border border-gray-200 px-3 py-2 space-y-2">
+                <button type="button" class="w-full text-left bg-white rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50 active:scale-[0.99] transition-all" onclick="window.app.pickVoiceCloneSpeaker('${this.escapeJs(v.id)}', event)">
                     <div class="flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <div class="text-sm font-semibold text-gray-800 truncate">${this.escapeHtml(label)}</div>
                             <div class="text-xs text-gray-500 truncate">${this.escapeHtml(v.id)}</div>
                         </div>
+                        <div class="text-xs text-gray-400">点击选择</div>
                     </div>
-                    <div class="flex items-center gap-2">
-                        <input id="${this.escapeHtml(inputId)}" class="flex-1 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" value="${this.escapeHtml(v.name || '')}" placeholder="给这个 speaker_id 起个名字（如：美玲）" />
-                        <button type="button" class="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all" onclick="window.app.saveTtsVoiceName('${this.escapeJs(v.id)}', event)">保存</button>
-                    </div>
-                </div>
+                </button>
             `;
         }).join('');
+    }
+
+    updateVoiceCloneSelectedNameUI() {
+        const idInput = document.getElementById('vcSpeakerId');
+        const idLabel = document.getElementById('ttsSelectedVoiceId');
+        const nameInput = document.getElementById('ttsSelectedVoiceName');
+        if (!idInput) return;
+
+        const speakerId = String(idInput.value || '').trim();
+        if (idLabel) idLabel.textContent = speakerId ? `当前 speaker_id：${speakerId}` : '当前 speaker_id：未选择';
+        if (!nameInput) return;
+
+        const list = Array.isArray(this.voiceCloneSpeakers) ? this.voiceCloneSpeakers : [];
+        const hit = list.find((x) => x && String(x.id || '').trim() === speakerId);
+        const existingName = hit && typeof hit.name === 'string' ? hit.name : '';
+        if (!speakerId) {
+            this.voiceCloneSelectedSpeakerId = '';
+            nameInput.value = '';
+            return;
+        }
+
+        if (this.voiceCloneSelectedSpeakerId !== speakerId) {
+            this.voiceCloneSelectedSpeakerId = speakerId;
+            nameInput.value = existingName || '';
+        }
+    }
+
+    pickVoiceCloneSpeaker(id, event) {
+        if (event) event.stopPropagation();
+        const speakerId = typeof id === 'string' ? id.trim() : '';
+        if (!speakerId) return;
+
+        const input = document.getElementById('vcSpeakerId');
+        if (input) input.value = speakerId;
+
+        const select = document.getElementById('vcSpeakerSelect');
+        if (select) select.value = speakerId;
+
+        this.updateVoiceCloneSelectedNameUI();
+        this.showNotification('已选择 speaker_id: ' + speakerId, 'success');
+    }
+
+    async saveSelectedVoiceCloneName() {
+        const idInput = document.getElementById('vcSpeakerId');
+        const nameInput = document.getElementById('ttsSelectedVoiceName');
+        const btn = document.getElementById('ttsSaveSelectedVoiceNameBtn');
+        const speakerId = idInput ? String(idInput.value || '').trim() : '';
+        const name = nameInput ? String(nameInput.value || '').trim() : '';
+
+        if (!speakerId) {
+            this.showNotification('请先选择 speaker_id', 'warning');
+            return;
+        }
+
+        if (btn) btn.disabled = true;
+        try {
+            await this.apiRequest('/tts/voices', {
+                method: 'POST',
+                body: JSON.stringify({ id: speakerId, name, group: '我的音色' })
+            });
+            await this.refreshTtsVoices({ silent: true });
+            this.showNotification('已保存名称', 'success');
+        } catch (e) {
+            this.showNotification('保存失败: ' + e.message, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     renderVoiceCloneSpeakerSelect(custom) {

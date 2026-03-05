@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>视频解析</title>
     <link rel="stylesheet" href="/tailwind.css?v=2.1.5">
-    <link rel="stylesheet" href="/theme.css?v=2.1.5">
+    <link rel="stylesheet" href="/theme.css?v=2.2.0">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Noto Sans SC', sans-serif; }
@@ -136,7 +136,11 @@
                 <div class="text-xs text-gray-500 truncate">
                     <span class="text-gray-400">来源：</span><span id="sourceUrlText"></span>
                 </div>
-                <button id="publishBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">下载并发布到首页</button>
+                <div class="flex items-center gap-2 flex-wrap justify-end">
+                    <button id="publishTextToHomeBtn" type="button" class="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors text-sm font-semibold">发布文案到首页</button>
+                    <button id="extractAudioToHomeBtn" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors text-sm font-semibold">提取音频到首页</button>
+                    <button id="publishBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">发布视频到首页</button>
+                </div>
             </div>
         </div>
         <div class="h-24"></div>
@@ -183,6 +187,7 @@
         </div>
     </nav>
 
+    <script src="/main.js?v=2.2.4"></script>
     <script>
         const LS_KEYS = {
             baseUrl: 'video_parser_base_url',
@@ -213,8 +218,10 @@
         const downloadCoverBtn = el('downloadCoverBtn');
         const sourceUrlText = el('sourceUrlText');
         const publishBtn = el('publishBtn');
+        const extractAudioToHomeBtn = el('extractAudioToHomeBtn');
+        const publishTextToHomeBtn = el('publishTextToHomeBtn');
 
-        const state = { parsed: null, sourceUrl: '' };
+        const state = { parsed: null, sourceUrl: '', publishedVideo: null };
 
         function loadConfig() {
             baseUrlInput.value = localStorage.getItem(LS_KEYS.baseUrl) || '192.168.5.41:8086';
@@ -268,6 +275,7 @@
         function renderResult(parsed, sourceUrl) {
             state.parsed = parsed;
             state.sourceUrl = sourceUrl || '';
+            state.publishedVideo = null;
 
             const data = parsed && parsed.data ? parsed.data : null;
             const author = data && data.author ? data.author : null;
@@ -288,6 +296,113 @@
             downloadCoverBtn.href = coverUrl ? buildProxyUrl(coverUrl, { download: true, filename: titleSafe + '.webp' }) : '#';
 
             resultSection.classList.remove('hidden');
+        }
+
+        function buildCaptionText(data) {
+            if (!data) return '';
+            const title = data && data.title ? String(data.title) : '';
+            const author = data && data.author ? data.author : null;
+            const authorName = author && author.name ? String(author.name) : '';
+            const parts = [];
+            if (title.trim()) parts.push(title.trim());
+            if (authorName.trim()) parts.push(`@${authorName.trim()}`);
+            if (state.sourceUrl) parts.push(state.sourceUrl);
+            return parts.join('\n').trim();
+        }
+
+        function getAsrPublicBaseUrl() {
+            try {
+                const raw = localStorage.getItem('mediaShareSettings');
+                if (!raw) return window.location.origin;
+                const obj = JSON.parse(raw);
+                if (obj && typeof obj.asrPublicBaseUrl === 'string' && obj.asrPublicBaseUrl.trim()) {
+                    return obj.asrPublicBaseUrl.trim();
+                }
+            } catch {}
+            return window.location.origin;
+        }
+
+        function toast(message, type) {
+            if (window.app && typeof window.app.showNotification === 'function') {
+                return window.app.showNotification(message, type);
+            }
+            return { remove: () => {} };
+        }
+
+        async function monitorTask(taskId) {
+            let lastIndex = -1;
+            let activeToast = null;
+
+            while (true) {
+                const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+                const json = await resp.json().catch(() => null);
+                if (!resp.ok || !json || json.success !== true) {
+                    const msg = json && json.message ? String(json.message) : '任务查询失败';
+                    throw new Error(msg);
+                }
+
+                const task = json.data || {};
+                const steps = Array.isArray(task.steps) ? task.steps : [];
+                const status = typeof task.status === 'string' ? task.status : 'running';
+                const error = typeof task.error === 'string' ? task.error : '';
+
+                if (steps.length - 1 > lastIndex) {
+                    for (let i = lastIndex + 1; i < steps.length; i += 1) {
+                        const m = steps[i] && typeof steps[i].message === 'string' ? steps[i].message : '';
+                        if (m) {
+                            if (activeToast) activeToast.remove();
+                            activeToast = toast(m, 'loading');
+                            setStatus(m, '');
+                        }
+                        lastIndex = i;
+                    }
+                }
+
+                if (status !== 'running') {
+                    if (activeToast) activeToast.remove();
+                    if (status === 'success') {
+                        toast('完成', 'success');
+                        setStatus('完成（返回首页即可看到）', 'success');
+                        return;
+                    }
+                    const msg = error || '失败';
+                    toast(msg, 'error');
+                    setStatus(msg, 'error');
+                    throw new Error(msg);
+                }
+
+                await new Promise((r) => setTimeout(r, 1500));
+            }
+        }
+
+        async function runTask({ endpoint, payload, button, idleText, runningText }) {
+            if (button) {
+                button.disabled = true;
+                button.textContent = runningText;
+            }
+            const startToast = toast('任务已提交', 'loading');
+            try {
+                const resp = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload || {})
+                });
+                const json = await resp.json().catch(() => null);
+                if (!resp.ok || !json || json.success !== true) {
+                    const msg = json && json.message ? String(json.message) : '任务创建失败';
+                    throw new Error(msg);
+                }
+                const taskId = json && json.data && typeof json.data.taskId === 'string' ? json.data.taskId : '';
+                if (!taskId) throw new Error('任务创建失败');
+                startToast.remove();
+                await monitorTask(taskId);
+            } finally {
+                if (startToast) startToast.remove();
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = idleText;
+                }
+            }
         }
 
         async function parse() {
@@ -341,36 +456,65 @@
                 setStatus('没有可发布的视频', 'error');
                 return;
             }
+            const author = data.author || {};
+            setStatus('准备发布...', '');
+            await runTask({
+                endpoint: '/api/video-parser/tasks/publish',
+                payload: {
+                    videoUrl: data.video_url,
+                    coverUrl: data.cover_url || '',
+                    title: data.title || '',
+                    authorName: author.name || '',
+                    sourceUrl: state.sourceUrl || ''
+                },
+                button: publishBtn,
+                idleText: '发布视频到首页',
+                runningText: '发布中...'
+            });
+        }
 
-            publishBtn.disabled = true;
-            publishBtn.textContent = '下载发布中...';
-            setStatus('下载并发布中（大视频可能需要等待）...', '');
-            try {
-                const author = data.author || {};
-                const resp = await fetch('/api/video-parser/publish', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        videoUrl: data.video_url,
-                        coverUrl: data.cover_url || '',
-                        title: data.title || '',
-                        authorName: author.name || '',
-                        sourceUrl: state.sourceUrl || ''
-                    })
-                });
-                const json = await resp.json().catch(() => null);
-                if (!resp.ok || !json || json.success !== true) {
-                    const msg = json && json.message ? json.message : '发布失败';
-                    setStatus(msg, 'error');
-                    return;
-                }
-                setStatus('已发布到首页（返回首页即可看到）', 'success');
-            } catch {
-                setStatus('网络错误，请重试', 'error');
-            } finally {
-                publishBtn.disabled = false;
-                publishBtn.textContent = '下载并发布到首页';
+        async function publishCaptionToHome() {
+            const parsed = state.parsed;
+            const data = parsed && parsed.data ? parsed.data : null;
+            if (!data || !data.video_url) {
+                setStatus('没有可识别的视频', 'error');
+                return;
             }
+            setStatus('准备识别...', '');
+            await runTask({
+                endpoint: '/api/video-parser/tasks/asr-text',
+                payload: {
+                    videoUrl: data.video_url,
+                    publicBaseUrl: getAsrPublicBaseUrl(),
+                    language: ''
+                },
+                button: publishTextToHomeBtn,
+                idleText: '发布文案到首页',
+                runningText: '识别中...'
+            });
+        }
+
+        async function extractAudioToHome() {
+            const parsed = state.parsed;
+            const data = parsed && parsed.data ? parsed.data : null;
+            if (!data || !data.video_url) {
+                setStatus('没有可提取音频的视频', 'error');
+                return;
+            }
+            const author = data.author || {};
+            setStatus('准备提取...', '');
+            await runTask({
+                endpoint: '/api/video-parser/tasks/extract-audio',
+                payload: {
+                    videoUrl: data.video_url,
+                    title: data.title || '',
+                    authorName: author.name || '',
+                    sourceUrl: state.sourceUrl || ''
+                },
+                button: extractAudioToHomeBtn,
+                idleText: '提取音频到首页',
+                runningText: '提取中...'
+            });
         }
 
         toggleConfigBtn.addEventListener('click', () => {
@@ -393,11 +537,13 @@
         });
         copyTextBtn.addEventListener('click', async () => {
             const data = state.parsed && state.parsed.data ? state.parsed.data : null;
-            const txt = data && data.title ? data.title : '';
+            const txt = buildCaptionText(data);
             const ok = await copyText(txt);
             setStatus(ok ? '已复制文案' : '复制失败', ok ? 'success' : 'error');
         });
         publishBtn.addEventListener('click', publish);
+        extractAudioToHomeBtn.addEventListener('click', extractAudioToHome);
+        publishTextToHomeBtn.addEventListener('click', publishCaptionToHome);
 
         shareInput.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') parse();
