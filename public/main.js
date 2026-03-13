@@ -1014,7 +1014,7 @@ class MediaShareApp {
                 contentGrid.style.display = 'none';
             } else {
                 loadingState.classList.add('hidden');
-                contentGrid.style.display = 'block';
+                contentGrid.style.removeProperty('display');
             }
         }
     }
@@ -1282,7 +1282,7 @@ class MediaShareApp {
             return;
         }
         
-        contentGrid.style.display = 'block';
+        contentGrid.style.removeProperty('display');
         if (emptyState) emptyState.classList.add('hidden');
         
         contentGrid.innerHTML = filteredContents.map(content => this.createContentCard(content)).join('');
@@ -1313,21 +1313,54 @@ class MediaShareApp {
     prepareVideoThumbnails(rootEl) {
         if (!rootEl) return;
         const videos = rootEl.querySelectorAll('video[data-video-thumb="1"]');
+        if (!videos.length) return;
+
+        if (!this.videoThumbObserver && 'IntersectionObserver' in window) {
+            this.videoThumbObserver = new IntersectionObserver((entries) => {
+                entries.forEach((entry) => {
+                    if (!entry.isIntersecting) return;
+                    const video = entry.target;
+                    this.videoThumbObserver.unobserve(video);
+                    this.activateVideoThumbnail(video);
+                });
+            }, {
+                root: null,
+                rootMargin: '220px 0px',
+                threshold: 0.01
+            });
+        }
+
         videos.forEach((video) => {
             if (video.dataset.thumbReady === '1') return;
-            video.dataset.thumbReady = '1';
-            const seekTo = () => {
-                try {
-                    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
-                    const t = Math.min(0.2, Math.max(0.05, video.duration * 0.02));
-                    if (Math.abs(video.currentTime - t) < 0.01) return;
-                    video.currentTime = t;
-                } catch {}
-            };
-            video.addEventListener('loadedmetadata', seekTo, { once: true });
-            video.addEventListener('loadeddata', seekTo, { once: true });
-            if (video.readyState >= 1) seekTo();
+            if (this.videoThumbObserver) {
+                this.videoThumbObserver.observe(video);
+            } else {
+                this.activateVideoThumbnail(video);
+            }
         });
+    }
+
+    activateVideoThumbnail(video) {
+        if (!video || video.dataset.thumbReady === '1') return;
+        video.dataset.thumbReady = '1';
+        video.preload = 'metadata';
+
+        const seekTo = () => {
+            try {
+                if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+                const t = Math.min(0.2, Math.max(0.05, video.duration * 0.02));
+                if (Math.abs(video.currentTime - t) < 0.01) return;
+                video.currentTime = t;
+            } catch {}
+        };
+
+        video.addEventListener('loadedmetadata', seekTo, { once: true });
+        video.addEventListener('loadeddata', seekTo, { once: true });
+
+        if (video.readyState >= 1) seekTo();
+        else {
+            try { video.load(); } catch {}
+        }
     }
 
     renderDeletedContents() {
@@ -1344,7 +1377,7 @@ class MediaShareApp {
             return;
         }
         
-        contentGrid.style.display = 'block';
+        contentGrid.style.removeProperty('display');
         if (emptyState) emptyState.classList.add('hidden');
         
         contentGrid.innerHTML = filteredContents.map(content => this.createDeletedContentCard(content)).join('');
@@ -1448,7 +1481,7 @@ class MediaShareApp {
             const hasOriginal = !!content.originalData;
             return `
                 <div class="${isModal ? 'max-h-[70vh] flex justify-center' : 'aspect-square'} bg-gray-100 rounded-lg overflow-hidden mb-3 relative group">
-                    <img src="${content.data}" alt="图片" onerror="window.app.handleImageLoadError(this)" class="${isModal ? 'max-w-full max-h-full object-contain' : 'w-full h-full object-cover'}">
+                    <img src="${content.data}" alt="图片" loading="${isModal ? 'eager' : 'lazy'}" decoding="async" onerror="window.app.handleImageLoadError(this)" class="${isModal ? 'max-w-full max-h-full object-contain' : 'w-full h-full object-cover'}">
                     <div class="absolute top-2 right-2 flex items-center justify-center">
                         <div class="flex items-center gap-2">
                             <a href="${content.data}" download="${content.filename || 'download'}" class="p-3 bg-white rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all border border-gray-100" style="background: rgba(255,255,255,0.95);" title="下载 JPG" onclick="event.stopPropagation()">
@@ -1465,8 +1498,9 @@ class MediaShareApp {
                 ${content.text ? `
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm ${isModal ? '' : 'line-clamp-3'} flex-1">${content.text}</p>
-                        <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            ${this.svgIcon('copy', 'w-5 h-5')}
+                        <button onclick="window.app.copyText('${escapedText}', event)" class="card-copy-chip" title="复制描述">
+                            <span class="card-copy-chip-mark" aria-hidden="true"></span>
+                            <span>复制</span>
                         </button>
                     </div>
                 ` : ''}
@@ -1505,8 +1539,9 @@ class MediaShareApp {
                     ${content.text ? `
                         <div class="flex items-start justify-between gap-2 p-1">
                             <p class="text-gray-700 text-sm whitespace-pre-wrap flex-1">${content.text}</p>
-                            <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all">
-                                ${this.svgIcon('copy', 'w-5 h-5')}
+                            <button onclick="window.app.copyText('${escapedText}', event)" class="card-copy-chip" title="复制描述">
+                                <span class="card-copy-chip-mark" aria-hidden="true"></span>
+                                <span>复制</span>
                             </button>
                         </div>
                     ` : ''}
@@ -1520,7 +1555,8 @@ class MediaShareApp {
                             muted
                             playsinline
                             webkit-playsinline
-                            preload="metadata"
+                            preload="none"
+                            loading="lazy"
                             data-video-thumb="1"
                         ></video>
                         <div class="absolute inset-0 flex items-center justify-center bg-black transition-all" style="background: rgba(0,0,0,0.25);">
@@ -1546,8 +1582,9 @@ class MediaShareApp {
                     ${content.text ? `
                         <div class="flex items-start justify-between gap-2">
                             <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
-                            <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                                ${this.svgIcon('copy', 'w-5 h-5')}
+                            <button onclick="window.app.copyText('${escapedText}', event)" class="card-copy-chip" title="复制描述">
+                                <span class="card-copy-chip-mark" aria-hidden="true"></span>
+                                <span>复制</span>
                             </button>
                         </div>
                     ` : ''}
@@ -1579,8 +1616,9 @@ class MediaShareApp {
                 ${content.text ? `
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
-                        <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            ${this.svgIcon('copy', 'w-5 h-5')}
+                        <button onclick="window.app.copyText('${escapedText}', event)" class="card-copy-chip" title="复制描述">
+                            <span class="card-copy-chip-mark" aria-hidden="true"></span>
+                            <span>复制</span>
                         </button>
                     </div>
                 ` : ''}
@@ -1604,20 +1642,23 @@ class MediaShareApp {
                 ${content.text ? `
                     <div class="flex items-start justify-between gap-2">
                         <p class="text-gray-700 text-sm line-clamp-3 flex-1">${content.text}</p>
-                        <button onclick="window.app.copyText('${escapedText}', event)" class="p-2 text-gray-400 hover:text-blue-600 active:scale-90 transition-all" title="复制描述">
-                            ${this.svgIcon('copy', 'w-5 h-5')}
+                        <button onclick="window.app.copyText('${escapedText}', event)" class="card-copy-chip" title="复制描述">
+                            <span class="card-copy-chip-mark" aria-hidden="true"></span>
+                            <span>复制</span>
                         </button>
                     </div>
                 ` : ''}
             `;
         } else {
             return `
-                <div class="p-5 bg-gray-50 rounded-xl mb-3 relative group border border-gray-200">
+                <div class="p-5 bg-gray-50 rounded-xl mb-3 relative group border border-gray-200 text-note-card">
                     <p class="text-gray-800 whitespace-pre-wrap leading-relaxed ${isModal ? '' : 'line-clamp-5 text-sm'}">${content.text}</p>
-                    <button onclick="window.app.copyText('${escapedText}', event)" class="absolute bottom-2 right-2 p-3 bg-white border border-gray-200 rounded-lg shadow-md hover:bg-gray-50 active:scale-90 transition-all text-blue-600 flex items-center space-x-1" style="background: rgba(255,255,255,0.95);" title="复制文本">
-                        ${this.svgIcon('copy', 'w-5 h-5')}
-                        <span class="text-xs font-bold">复制全文</span>
-                    </button>
+                    <div class="mt-3 flex justify-end">
+                        <button onclick="window.app.copyText('${escapedText}', event)" class="text-copy-chip" title="复制文本">
+                            <span class="text-copy-chip-mark" aria-hidden="true"></span>
+                            <span>复制文本</span>
+                        </button>
+                    </div>
                 </div>
             `;
         }

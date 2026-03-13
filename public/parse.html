@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>视频解析</title>
     <link rel="stylesheet" href="/tailwind.css?v=2.1.5">
-    <link rel="stylesheet" href="/theme.css?v=2.2.0">
+    <link rel="stylesheet" href="/theme.css?v=2.2.7">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Noto Sans SC', sans-serif; }
@@ -49,7 +49,7 @@
         }
     </style>
 </head>
-<body>
+<body class="page-parse">
     <header class="glass-effect sticky top-0 z-40 px-4 py-3">
         <div class="flex items-center justify-between max-w-6xl mx-auto">
             <div class="flex items-center space-x-3">
@@ -69,7 +69,7 @@
     </header>
 
     <main class="content-wrapper max-w-6xl mx-auto px-4 py-6">
-        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg parse-config-card">
             <div class="flex items-center justify-between gap-3">
                 <div class="flex items-center gap-2">
                     <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center">
@@ -80,66 +80,85 @@
                         <div class="text-xs text-gray-500">配置会保存在当前浏览器中</div>
                     </div>
                 </div>
-                <button id="toggleConfigBtn" type="button" class="px-3 py-2 rounded-lg bg-gray-100 text-xs text-gray-700 hover:bg-gray-200 transition-colors">展开/收起</button>
+                <button id="toggleConfigBtn" type="button" class="parse-btn parse-btn-secondary parse-btn-sm">展开配置</button>
             </div>
-            <div id="configPanel" class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4 hidden">
-                <div>
-                    <div class="text-xs text-gray-600 mb-1">接口地址</div>
-                    <input id="baseUrlInput" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="192.168.5.41:8086" />
+            <div id="configPanel" class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4 hidden parse-config-panel">
+                <div class="md:col-span-3 parse-field">
+                    <div class="text-xs text-gray-600 mb-1 parse-field-label">接口地址</div>
+                    <input id="baseUrlInput" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="http://192.168.5.41:8086" />
                 </div>
-                <div>
-                    <div class="text-xs text-gray-600 mb-1">账号</div>
+                <div class="parse-field">
+                    <div class="text-xs text-gray-600 mb-1 parse-field-label">账号</div>
                     <input id="usernameInput" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="admin" />
                 </div>
-                <div>
-                    <div class="text-xs text-gray-600 mb-1">密码</div>
+                <div class="parse-field">
+                    <div class="text-xs text-gray-600 mb-1 parse-field-label">密码</div>
                     <input id="passwordInput" type="password" class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" placeholder="admin" />
                 </div>
+                <div class="parse-field flex items-end">
+                    <button id="resetConfigBtn" type="button" class="parse-btn parse-btn-secondary w-full">恢复默认配置</button>
+                </div>
+                <div class="md:col-span-3 text-xs text-gray-500 parse-config-hint">
+                    建议填写完整地址（包含 <code>http://</code> 或 <code>https://</code>），配置会自动保存到当前浏览器。
+                </div>
             </div>
         </div>
 
-        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg">
-            <div class="flex items-center justify-between mb-4">
+        <div class="glass-effect rounded-2xl p-6 mb-6 shadow-lg parse-input-card">
+            <div class="flex items-center justify-between gap-3 mb-4">
                 <h2 class="text-lg font-semibold text-gray-800">分享链接/文案</h2>
+                <button id="pasteBtn" type="button" class="parse-btn parse-btn-secondary parse-btn-sm">粘贴剪贴板</button>
             </div>
-            <textarea id="shareInput" class="w-full min-h-[140px] px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm resize-none" placeholder="粘贴分享文本或链接（支持包含中文、符号、换行）。例如：&#10;5.66 MjC:/ U@l.cN 04/17 河南三亚变天了... https://v.douyin.com/_AbaiGNk-sA/ 复制此链接，打开Dou音搜索..."></textarea>
+            <p class="text-sm text-gray-500 mb-3 parse-input-hint">粘贴完整分享文案或单独链接。支持中文、符号和多行文本。</p>
+            <textarea id="shareInput" class="w-full min-h-[220px] px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm resize-none" placeholder="示例：&#10;7.23 hTY:/ 复制打开抖音，看看【xxx】的视频&#10;https://v.douyin.com/xxxxxxxx/"></textarea>
             <div class="flex items-center justify-between gap-3 mt-4 flex-wrap">
                 <div id="statusText" class="text-xs text-gray-500"></div>
-                <div class="flex items-center gap-3">
-                    <button id="clearBtn" type="button" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm">清空</button>
-                    <button id="parseBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">开始解析</button>
+                <div class="flex items-center gap-3 parse-primary-actions">
+                    <button id="clearBtn" type="button" class="parse-btn parse-btn-secondary">清空</button>
+                    <button id="parseBtn" type="button" class="parse-btn parse-btn-primary">开始解析</button>
                 </div>
             </div>
         </div>
 
-        <div id="resultSection" class="glass-effect rounded-2xl p-6 shadow-lg hidden">
-            <div class="flex items-center gap-3 mb-4">
-                <img id="authorAvatar" class="w-10 h-10 rounded-full bg-gray-200 object-cover" alt="" />
-                <div class="flex-1 min-w-0">
-                    <div id="authorName" class="text-sm font-semibold text-gray-800 truncate"></div>
-                    <div id="videoTitle" class="text-xs text-gray-500 truncate"></div>
+        <div id="resultSection" class="glass-effect rounded-2xl p-6 shadow-lg hidden parse-result-card">
+            <div class="parse-result-head mb-4">
+                <div class="flex items-center gap-3 min-w-0 flex-1 overflow-hidden">
+                    <img id="authorAvatar" class="w-10 h-10 rounded-full bg-gray-200 object-cover" alt="" />
+                    <div class="flex-1 min-w-0">
+                        <div id="authorName" class="text-sm font-semibold text-gray-800 truncate"></div>
+                        <div id="videoTitle" class="text-xs text-gray-500 parse-video-title"></div>
+                    </div>
                 </div>
+                <div class="parse-pill">解析完成</div>
             </div>
 
-            <div class="rounded-xl overflow-hidden bg-black">
+            <div class="parse-media-shell rounded-xl overflow-hidden bg-black">
                 <video id="videoPlayer" controls playsinline class="w-full h-auto"></video>
             </div>
 
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
-                <button id="copyLinkBtn" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">复制视频链接</button>
-                <button id="copyTextBtn" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">复制文案</button>
-                <a id="downloadVideoBtn" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors text-center" href="#" download>保存视频</a>
-                <a id="downloadCoverBtn" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors text-center" href="#" download>保存封面</a>
+            <div class="parse-subcard mt-4">
+                <div class="parse-subtitle">快捷操作</div>
+                <div class="parse-tool-grid grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                    <button id="copyLinkBtn" type="button" class="parse-btn parse-btn-secondary">复制视频链接</button>
+                    <button id="copyTextBtn" type="button" class="parse-btn parse-btn-secondary">复制文案</button>
+                    <a id="downloadVideoBtn" class="parse-btn parse-btn-secondary text-center" href="#" download>保存视频</a>
+                    <a id="downloadCoverBtn" class="parse-btn parse-btn-secondary text-center" href="#" download>保存封面</a>
+                </div>
             </div>
 
-            <div class="flex items-center justify-between gap-3 mt-4 flex-wrap">
-                <div class="text-xs text-gray-500 truncate">
-                    <span class="text-gray-400">来源：</span><span id="sourceUrlText"></span>
+            <div class="parse-subcard parse-source-card mt-4">
+                <div class="parse-subtitle">来源链接</div>
+                <div class="parse-source-url text-xs text-gray-500 mt-2">
+                    <span id="sourceUrlText"></span>
                 </div>
-                <div class="flex items-center gap-2 flex-wrap justify-end">
-                    <button id="publishTextToHomeBtn" type="button" class="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors text-sm font-semibold">发布文案到首页</button>
-                    <button id="extractAudioToHomeBtn" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors text-sm font-semibold">提取音频到首页</button>
-                    <button id="publishBtn" type="button" class="px-5 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors text-sm font-semibold">发布视频到首页</button>
+            </div>
+
+            <div class="parse-subcard mt-4">
+                <div class="parse-subtitle">发布到首页</div>
+                <div class="parse-result-actions mt-3">
+                    <button id="publishTextToHomeBtn" type="button" class="parse-btn parse-btn-secondary">发布文案到首页</button>
+                    <button id="extractAudioToHomeBtn" type="button" class="parse-btn parse-btn-primary">提取音频到首页</button>
+                    <button id="publishBtn" type="button" class="parse-btn parse-btn-primary">发布视频到首页</button>
                 </div>
             </div>
         </div>
@@ -187,7 +206,7 @@
         </div>
     </nav>
 
-    <script src="/main.js?v=2.2.4"></script>
+    <script src="/main.js?v=2.2.5"></script>
     <script>
         const LS_KEYS = {
             baseUrl: 'video_parser_base_url',
@@ -206,6 +225,8 @@
         const shareInput = el('shareInput');
         const parseBtn = el('parseBtn');
         const clearBtn = el('clearBtn');
+        const pasteBtn = el('pasteBtn');
+        const resetConfigBtn = el('resetConfigBtn');
 
         const resultSection = el('resultSection');
         const authorAvatar = el('authorAvatar');
@@ -222,11 +243,21 @@
         const publishTextToHomeBtn = el('publishTextToHomeBtn');
 
         const state = { parsed: null, sourceUrl: '', publishedVideo: null };
+        const DEFAULT_CONFIG = {
+            baseUrl: '192.168.5.41:8086',
+            username: 'admin',
+            password: 'admin'
+        };
+
+        function syncConfigToggleLabel() {
+            const hidden = configPanel.classList.contains('hidden');
+            toggleConfigBtn.textContent = hidden ? '展开配置' : '收起配置';
+        }
 
         function loadConfig() {
-            baseUrlInput.value = localStorage.getItem(LS_KEYS.baseUrl) || '192.168.5.41:8086';
-            usernameInput.value = localStorage.getItem(LS_KEYS.username) || 'admin';
-            passwordInput.value = localStorage.getItem(LS_KEYS.password) || 'admin';
+            baseUrlInput.value = localStorage.getItem(LS_KEYS.baseUrl) || DEFAULT_CONFIG.baseUrl;
+            usernameInput.value = localStorage.getItem(LS_KEYS.username) || DEFAULT_CONFIG.username;
+            passwordInput.value = localStorage.getItem(LS_KEYS.password) || DEFAULT_CONFIG.password;
         }
 
         function saveConfig() {
@@ -519,6 +550,14 @@
 
         toggleConfigBtn.addEventListener('click', () => {
             configPanel.classList.toggle('hidden');
+            syncConfigToggleLabel();
+        });
+        resetConfigBtn.addEventListener('click', () => {
+            baseUrlInput.value = DEFAULT_CONFIG.baseUrl;
+            usernameInput.value = DEFAULT_CONFIG.username;
+            passwordInput.value = DEFAULT_CONFIG.password;
+            saveConfig();
+            setStatus('已恢复默认配置', 'success');
         });
         baseUrlInput.addEventListener('input', saveConfig);
         usernameInput.addEventListener('input', saveConfig);
@@ -529,6 +568,25 @@
             setStatus('', '');
             resultSection.classList.add('hidden');
             state.parsed = null;
+        });
+        pasteBtn.addEventListener('click', async () => {
+            try {
+                if (!navigator.clipboard || !window.isSecureContext) {
+                    shareInput.focus();
+                    setStatus('请手动粘贴，或使用 Ctrl/Cmd+V', '');
+                    return;
+                }
+                const txt = await navigator.clipboard.readText();
+                if (!txt) {
+                    setStatus('剪贴板为空', 'error');
+                    return;
+                }
+                shareInput.value = txt.trim();
+                setStatus('已粘贴剪贴板内容', 'success');
+            } catch {
+                shareInput.focus();
+                setStatus('读取剪贴板失败，请手动粘贴', 'error');
+            }
         });
         copyLinkBtn.addEventListener('click', async () => {
             const data = state.parsed && state.parsed.data ? state.parsed.data : null;
@@ -550,6 +608,7 @@
         });
 
         loadConfig();
+        syncConfigToggleLabel();
     </script>
 </body>
 </html>
